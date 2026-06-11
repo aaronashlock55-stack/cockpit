@@ -55,18 +55,39 @@ const DEFAULT_VIEWBOX_WIDTH = 1250
 enum SVGModel {
   PS4 = 'PS4',
   PS5 = 'PS5',
+  Xbox = 'Xbox',
+  Generic = 'Generic',
   LogitechExtreme3DPro = 'LogitechExtreme3DPro',
   IPEGAPG9023 = 'Ipega9023',
 }
 
+// Resolves the detected joystick model to the SVG layout that best matches its
+// physical appearance. Unknown/unmapped controllers fall back to the generic
+// standard-gamepad image.
+// Note: PS5.svg exists but is a plain illustration without the interactive
+// path_bN/text_bN anatomy, so DualSense uses the PS4 layout.
 const joystickSvgModel = computed(() => {
   switch (joystickModel.value) {
+    case JoystickModel.DualSense:
+    case JoystickModel.DualShock4:
+      return SVGModel.PS4
+    case JoystickModel.XboxOne_Wireless:
+    case JoystickModel.XboxOne_Wired:
+    case JoystickModel.XboxOneS_Bluetooth:
+    case JoystickModel.XboxController_Bluetooth:
+    case JoystickModel.XboxController_Wired:
+    case JoystickModel.XboxController_360:
+    case JoystickModel.SteamDeckLCD:
+    case JoystickModel.SteamDeckOLED:
+    case JoystickModel.EightBitDoUltimate2C:
+      return SVGModel.Xbox
     case JoystickModel.LogitechExtreme3DPro:
+    case JoystickModel.ThrustmasterSimTaskFarmStick:
       return SVGModel.LogitechExtreme3DPro
     case JoystickModel.IpegaPG9023:
       return SVGModel.IPEGAPG9023
     default:
-      return SVGModel.PS4
+      return SVGModel.Generic
   }
 })
 
@@ -453,7 +474,9 @@ function setAxes(
 ): void {
   let xValue
   let yValue
-  switch (joystickModel.value) {
+  // Keyed off the resolved SVG layout (not the joystick model), since stick
+  // travel ranges are a property of the rendered SVG's geometry.
+  switch (joystickSvgModel.value) {
     case SVGModel.PS5: {
       xValue =
         axes[0] == JoystickAxis.A0
