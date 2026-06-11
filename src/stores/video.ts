@@ -113,6 +113,22 @@ export const useVideoStore = defineStore('video', () => {
     return streamsCorrespondency.value.map((stream) => stream.name)
   })
 
+  // The 'active' video feed, used by multi-stream layouts (VideoGrid widget) to decide
+  // which stream is focused/enlarged, and advanced by the 'Cycle video stream' joystick action.
+  const activeStreamName = ref<string | undefined>(undefined)
+
+  const setActiveStream = (internalName: string): void => {
+    if (!namessAvailableAbstractedStreams.value.includes(internalName)) return
+    activeStreamName.value = internalName
+  }
+
+  const cycleActiveStream = (): void => {
+    const names = namessAvailableAbstractedStreams.value
+    if (names.isEmpty()) return
+    const currentIndex = activeStreamName.value ? names.indexOf(activeStreamName.value) : -1
+    activeStreamName.value = names[(currentIndex + 1) % names.length]
+  }
+
   const externalStreamId = (internalName: string): string | undefined => {
     const corr = streamsCorrespondency.value.find((stream) => stream.name === internalName)
     return corr ? corr.externalId : undefined
@@ -1279,6 +1295,9 @@ export const useVideoStore = defineStore('video', () => {
     streamsCorrespondency,
     ignoredStreamExternalIds,
     namessAvailableAbstractedStreams,
+    activeStreamName,
+    setActiveStream,
+    cycleActiveStream,
     externalStreamId,
     internalStreamNameFromExternal,
     getStreamProtocol,
