@@ -1281,6 +1281,7 @@ export const useVideoStore = defineStore('video', () => {
     availableCockpitActions.toggle_recording_all_streams,
     useThrottleFn(toggleRecordingAllStreams, 3000)
   )
+  registerActionCallback(availableCockpitActions.cycle_video_stream, useThrottleFn(cycleActiveStream, 300))
 
   return {
     availableIceIps,

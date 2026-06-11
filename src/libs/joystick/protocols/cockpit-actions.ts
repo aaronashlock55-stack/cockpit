@@ -19,6 +19,7 @@ export const CockpitActionsFunction = {
   stop_recording_all_streams: 'stop_recording_all_streams',
   toggle_recording_all_streams: 'toggle_recording_all_streams',
   take_snapshot: 'take_snapshot',
+  cycle_video_stream: 'cycle_video_stream',
   hold_to_confirm: 'hold_to_confirm',
 } as const
 
@@ -60,6 +61,7 @@ export const predefinedCockpitActions: { [key in CockpitActionsFunction]: Cockpi
   [CockpitActionsFunction.stop_recording_all_streams]: new CockpitAction(CockpitActionsFunction.stop_recording_all_streams, 'Stop recording all streams'),
   [CockpitActionsFunction.toggle_recording_all_streams]: new CockpitAction(CockpitActionsFunction.toggle_recording_all_streams, 'Toggle recording all streams'),
   [CockpitActionsFunction.take_snapshot]: new CockpitAction(CockpitActionsFunction.take_snapshot, 'Take snapshot'),
+  [CockpitActionsFunction.cycle_video_stream]: new CockpitAction(CockpitActionsFunction.cycle_video_stream, 'Cycle video stream'),
   [CockpitActionsFunction.hold_to_confirm]: new CockpitAction(CockpitActionsFunction.hold_to_confirm, 'Hold to confirm'),
 }
 
