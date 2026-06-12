@@ -1,5 +1,7 @@
 import { unit } from 'mathjs'
 
+import { applyExpo, stepDemandEnvelope } from '@/libs/input-shaping'
+import { type PracticePoseFrame } from '@/libs/practice-interp'
 import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { tetherFullPath } from '@/libs/rover-tether'
 // NOTE: the vehicle store and joystick manager are loaded lazily inside
@@ -10,7 +12,13 @@ import { tetherFullPath } from '@/libs/rover-tether'
 import { type BodyAxes } from '@/types/rover-profile'
 
 import { createDataLakeVariable, getDataLakeVariableInfo, setDataLakeVariableData } from './data-lake'
-import { activePracticeEnvironment, activeRoverProfile, isDemoModeActive, practiceSimReadout } from './demo-mode-state'
+import {
+  activePracticeEnvironment,
+  activeRoverProfile,
+  isDemoModeActive,
+  practicePoseFrames,
+  practiceSimReadout,
+} from './demo-mode-state'
 
 /**
  * Practice / Demo mode driver.
@@ -23,8 +31,12 @@ import { activePracticeEnvironment, activeRoverProfile, isDemoModeActive, practi
  * gentle automated "patrol" so reviewers see live motion with zero hardware.
  */
 
-const SIM_HZ = 25
+// Physics steps at 50 Hz for fidelity and glassy interpolated motion; telemetry
+// (store + data lake + pool-view readout) still publishes at 25 Hz, exactly as
+// before — do NOT publish those every tick or mathjs unit() churn doubles.
+const SIM_HZ = 50
 const dt = 1 / SIM_HZ
+const READOUT_EVERY = 2 // sim ticks per telemetry publish (50 Hz -> 25 Hz)
 
 // ArduSub flight modes keyed by the same enum names a real vehicle reports
 // (see ardusub.ts modesAvailable), so the mode UI behaves identically in demo.
@@ -111,34 +123,53 @@ export const keyboardDemand = (): BodyAxes | null => {
   return active ? demand : null
 }
 
+const zeroAxes = (): BodyAxes => ({ surge: 0, sway: 0, heave: 0, yaw: 0, pitch: 0, roll: 0 })
+
+/** Gamepad stick expo: softer center for fine positioning, full authority at full stick. */
+const STICK_EXPO = 0.3
+
+// Keyboard demand shaped through an attack/release envelope so keys behave
+// like an analog stick being pushed and released (thrust builds and bleeds off
+// instead of snapping) — the core of the "weight" feel on WASD.
+let shapedKeys: BodyAxes = zeroAxes()
+// Once the pilot has flown manually, the rover never moves on its own again
+// (the idle patrol is a pre-flight demo behavior only).
+let hasHadManualInput = false
+
 /**
  * Build the control demand for this tick: gamepad if recently active, else the
- * keyboard (WASD/arrows), else an automated patrol so demos always show motion.
+ * envelope-shaped keyboard, else (only before the first manual input ever) an
+ * automated patrol so hands-off demos still show motion.
  * @returns {BodyAxes} Per-axis demand in [-1, 1].
  */
 const currentDemand = (): BodyAxes => {
   const joystickActive = performance.now() - lastJoystickActivity < 1000 && latestAxes.length >= 2
   if (joystickActive) {
     lastManualInput = performance.now()
+    hasHadManualInput = true
+    shapedKeys = zeroAxes()
     return {
-      surge: -(latestAxes[1] ?? 0), // left stick vertical (up = forward)
-      sway: latestAxes[0] ?? 0, // left stick horizontal
-      yaw: latestAxes[2] ?? 0, // right stick horizontal
-      heave: latestAxes[3] ?? 0, // right stick vertical (down = descend)
+      surge: applyExpo(-(latestAxes[1] ?? 0), STICK_EXPO), // left stick vertical (up = forward)
+      sway: applyExpo(latestAxes[0] ?? 0, STICK_EXPO), // left stick horizontal
+      yaw: applyExpo(latestAxes[2] ?? 0, STICK_EXPO), // right stick horizontal
+      heave: applyExpo(latestAxes[3] ?? 0, STICK_EXPO), // right stick vertical (down = descend)
       pitch: 0,
       roll: 0,
     }
   }
 
-  const keys = keyboardDemand()
-  if (keys) {
+  const rawKeys = keyboardDemand()
+  shapedKeys = stepDemandEnvelope(shapedKeys, rawKeys ?? zeroAxes(), dt)
+  if (rawKeys) {
     lastManualInput = performance.now()
-    return keys
+    hasHadManualInput = true
   }
+  const keysSettling = Object.values(shapedKeys).some((v) => Math.abs(v) > 0.005)
+  if (rawKeys || keysSettling) return shapedKeys
 
-  // Hold still briefly after manual input stops instead of resuming the patrol immediately.
-  if (performance.now() - lastManualInput < 10000) {
-    return { surge: 0, sway: 0, heave: 0, yaw: 0, pitch: 0, roll: 0 }
+  // After the first manual input the rover holds position when idle.
+  if (hasHadManualInput || performance.now() - lastManualInput < 10000) {
+    return zeroAxes()
   }
 
   // Automated patrol: slow figure-eight-ish motion so HUDs/telemetry always move.
@@ -184,6 +215,8 @@ export const startDemoMode = async (): Promise<void> => {
 
   simState = initialSimState(activePracticeEnvironment.value)
   elapsed = 0
+  shapedKeys = zeroAxes()
+  hasHadManualInput = false
   isDemoModeActive.value = true
 
   // Keyboard fallback controls while practicing.
@@ -197,22 +230,45 @@ export const startDemoMode = async (): Promise<void> => {
 
   demoDataLakeIds.forEach(ensureDataLakeVar)
 
+  let tick = 0
   loopTimer = setInterval(() => {
     elapsed += dt
+    tick++
     const env = activePracticeEnvironment.value
     simState = stepSimulation(simState, activeRoverProfile.value, env, currentDemand(), dt, {
       gripperClosed: gripperClosedTarget.value,
     })
 
-    const depth = simState.depth
-    const headingDeg = (simState.heading * 180) / Math.PI
-    const battery = 16.8 - 0.0008 * elapsed - 0.05 * Math.abs(simState.surgeVel)
-    const tetherDeployed = tetherDeployedLength(simState, env)
+    // Pose frames publish EVERY tick (50 Hz): the 3D view interpolates between
+    // prev and curr so motion is glassy at any display refresh rate.
+    const frame: PracticePoseFrame = {
+      t: performance.now(),
+      x: simState.x,
+      y: simState.y,
+      depth: simState.depth,
+      heading: simState.heading,
+      pitch: simState.pitch,
+      roll: simState.roll,
+      speed: Math.hypot(simState.surgeVel, simState.swayVel, simState.heaveVel),
+      surgeVel: simState.surgeVel,
+      swayVel: simState.swayVel,
+      heaveVel: simState.heaveVel,
+    }
+    practicePoseFrames.value = { prev: practicePoseFrames.value?.curr ?? frame, curr: frame }
 
+    // Transient events are captured every tick so none slip between publishes.
     if (simState.justPassed) {
       recentPassName = simState.justPassed
       recentPassUntil = elapsed + 3
     }
+
+    // Everything below (readout + vehicle store + data lake) stays at 25 Hz.
+    if (tick % READOUT_EVERY !== 0) return
+
+    const depth = simState.depth
+    const headingDeg = (simState.heading * 180) / Math.PI
+    const battery = 16.8 - 0.0008 * elapsed - 0.05 * Math.abs(simState.surgeVel)
+    const tetherDeployed = tetherDeployedLength(simState, env)
 
     // Publish the pool-local readout for the practice widgets.
     practiceSimReadout.value = {
@@ -230,6 +286,8 @@ export const startDemoMode = async (): Promise<void> => {
       recentPass: elapsed < recentPassUntil ? recentPassName : undefined,
       gripper: simState.gripper,
       heldObstacleId: simState.heldObstacleId,
+      thrusterOutputs: simState.thrusterOutputs,
+      thrust: simState.thrust,
     }
 
     // Convert pool-local meters to lat/lon for the map widget (x = north, y = east).
@@ -285,6 +343,8 @@ export const stopDemoMode = (): void => {
   loopTimer = undefined
   isDemoModeActive.value = false
   practiceSimReadout.value = null
+  practicePoseFrames.value = null
+  shapedKeys = zeroAxes()
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('keyup', onKeyUp)
   pressedKeys.clear()

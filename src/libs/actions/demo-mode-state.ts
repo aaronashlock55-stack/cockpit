@@ -1,7 +1,8 @@
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 
+import { type PracticePoseFrame } from '@/libs/practice-interp'
 import { type PracticeEnvironment, defaultPracticeEnvironment } from '@/types/practice-environment'
-import { type RoverProfile, defaultRoverProfile } from '@/types/rover-profile'
+import { type BodyAxes, type RoverProfile, defaultRoverProfile } from '@/types/rover-profile'
 
 /**
  * Lightweight shared state for Practice/Demo mode, kept in its own module so both
@@ -41,7 +42,21 @@ export interface PracticeSimReadout {
   gripper?: number
   /** Id of the obstacle currently held by the claw, if any. */
   heldObstacleId?: string
+  /** Spooled per-thruster outputs [-1, 1] (drives prop-wash visuals). */
+  thrusterOutputs?: number[]
+  /** Achieved normalized force per axis [-1, 1]. */
+  thrust?: BodyAxes
 }
 
 /** Latest sim readout, or null when the sim is not running. */
 export const practiceSimReadout = ref<PracticeSimReadout | null>(null)
+
+/**
+ * Previous + current timestamped pose snapshots, published every sim tick for
+ * the 3D widget's render interpolation (shallowRef — replaced wholesale at
+ * sim rate, deep reactivity would be waste).
+ */
+export const practicePoseFrames = shallowRef<{
+  /** The snapshot before last. */ prev: PracticePoseFrame
+  /** The latest snapshot. */ curr: PracticePoseFrame
+} | null>(null)

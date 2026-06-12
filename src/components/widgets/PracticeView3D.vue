@@ -44,9 +44,14 @@ import * as THREE from 'three'
 import { computed, onBeforeUnmount, onMounted, ref, toRefs, watch } from 'vue'
 
 import VideoHudOverlay from '@/components/VideoHudOverlay.vue'
-import { activePracticeEnvironment, activeRoverProfile, practiceSimReadout } from '@/libs/actions/demo-mode-state'
+import {
+  activePracticeEnvironment,
+  activeRoverProfile,
+  practicePoseFrames,
+  practiceSimReadout,
+} from '@/libs/actions/demo-mode-state'
 import { type PracticeWorld, buildPracticeWorld } from '@/libs/practice-3d-scene'
-import { useMainVehicleStore } from '@/stores/mainVehicle'
+import { frameAlpha, interpolatePose } from '@/libs/practice-interp'
 import type { Widget } from '@/types/widgets'
 
 const props = defineProps<{
@@ -57,7 +62,6 @@ const props = defineProps<{
 }>()
 const widget = toRefs(props).widget
 
-const vehicleStore = useMainVehicleStore()
 const container = ref<HTMLDivElement>()
 const canvas = ref<HTMLCanvasElement>()
 const readout = computed(() => practiceSimReadout.value)
@@ -159,21 +163,17 @@ const renderLoop = (): void => {
   animationFrame = requestAnimationFrame(renderLoop)
   if (!renderer || !world) return
   const r = practiceSimReadout.value
-  if (!r) return
-  const speed = vehicleStore.velocity.overall
+  const frames = practicePoseFrames.value
+  if (!r || !frames) return
+  // Glassy motion at any refresh rate: blend the sim's prev/curr snapshots by
+  // wall-clock alpha instead of snapping to the latest tick.
+  const pose = interpolatePose(frames.prev, frames.curr, frameAlpha(frames.prev.t, frames.curr.t, performance.now()))
   world.update(
-    {
-      x: r.x,
-      y: r.y,
-      depth: r.depth,
-      heading: r.heading,
-      pitch: vehicleStore.attitude.pitch ?? 0,
-      roll: vehicleStore.attitude.roll ?? 0,
-    },
+    { x: pose.x, y: pose.y, depth: pose.depth, heading: pose.heading, pitch: pose.pitch, roll: pose.roll },
     {
       gripper: r.gripper ?? 0,
       cameraMode: cameraMode.value,
-      speed: Number.isFinite(speed) ? speed : 0,
+      speed: pose.speed,
       tetherPath: r.tetherPath,
       cameraAdjust: cameraAdjust.value,
     }
