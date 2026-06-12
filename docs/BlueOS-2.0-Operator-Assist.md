@@ -14,6 +14,32 @@
 | 12 | Full rover model + chase view, rigid-body contacts, visual realism | — |
 | 13 | Rigid-body camera (camera mounted on the rover) + tether snag physics | — |
 | 14 | Adjustable camera, water currents (wave pool / jet stream), graphics pass | — |
+| 15 | Consistent 3D hitboxes, Retina/4K rendering, custom GLSL shaders | — |
+
+## Phase 15 — Hitboxes, high-DPI & custom shaders
+
+**Hitboxes now match what you see.** Three collision/visual mismatches fixed:
+- **Boxes & cylinders resolve along the axis of least penetration** — descend
+  onto a crate or the recovery basket and the rover **lands on top** of it (and
+  bumps its head coming up underneath) instead of being shoved out sideways.
+- **The claw's grab point is the visible claw.** It used to be a fixed 0.75 m
+  bubble; now it's body-fixed just beyond the nose, below the centerline, and
+  rotates with attitude — pitch down and the grab point genuinely moves deeper.
+  Grab radius tightened so you must actually reach a prop to take it.
+- **Hoop meshes center on the exact torus-collision center**, so a custom
+  environment can't draw a hoop off its own hitbox.
+
+**Retina/4K rendering.** The renderer now uses the full native
+`devicePixelRatio` (previously capped at 2×) and re-applies it on every resize,
+so dragging the window between displays keeps the image pixel-crisp.
+
+**Custom GLSL shaders** (`practice-3d-shaders.ts`):
+- **Procedural caustics** — the canvas texture is gone; the pool floor now gets
+  a real animated interference web (the filament pattern sunlight makes through
+  water), fading into the murk with the same falloff as the scene fog.
+- **GPU water surface** — waves displace in the vertex shader (no more per-frame
+  CPU vertex loop, which also pays for the higher DPI), with analytic normals,
+  **fresnel** toward the horizon, and a sun sparkle off the wave facets.
 
 ## Phase 14 — Adjustable camera, currents & graphics
 

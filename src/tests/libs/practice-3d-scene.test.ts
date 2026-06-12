@@ -149,6 +149,17 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
+  it('ring meshes center at top + outer RADIUS — the exact torus collision center', () => {
+    const env = structuredClone(trainingCourseEnvironment)
+    const hoop = env.obstacles.find((o) => o.id === 'hoop-1')!
+    hoop.size = [1.4, 0.08, 99] // a bogus size[2] must NOT move the visible hoop off its hitbox
+    const world = buildPracticeWorld(env)
+    world.update({ x: 1, y: 1, depth: 1, heading: 0, pitch: 0, roll: 0 })
+    const mesh = world.scene.children.find((c) => c.name === 'obstacle-hoop-1')!
+    expect(mesh.position.y).toBeCloseTo(-(hoop.position[2] + hoop.size[0] / 2))
+    world.dispose()
+  })
+
   it('places obstacles at their pool position and depth', () => {
     const world = buildPracticeWorld(mate2026IceTankEnvironment)
     const float = world.scene.children.find((c) => c.name === 'obstacle-float-1')

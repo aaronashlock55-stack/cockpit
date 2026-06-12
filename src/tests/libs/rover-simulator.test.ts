@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { hydroModel, mixToBodyForce } from '@/libs/rover-hydro'
-import { initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
+import { gripperPoint, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile, blueRov2HeavyProfile, blueRov2Profile } from '@/types/rover-profile'
 
@@ -374,7 +374,7 @@ describe('gripper', () => {
 
   it('grabs a small obstacle within reach and holds it', () => {
     const env = floatEnv()
-    // Park right in front of the float (nose ~0.75 m ahead), facing it.
+    // Park right in front of the float, claw (just beyond the nose) facing it.
     const start = { ...initialSimState(env), x: 4.3, y: 5, depth: 1, heading: 0 }
     const state = runGrip(env, 30, start, true)
     expect(state.gripper).toBeGreaterThan(0.9)
@@ -415,5 +415,50 @@ describe('gripper', () => {
     const start = { ...initialSimState(env), x: 4.0, y: 5, depth: 1, heading: 0 }
     const state = runGrip(env, 30, start, true)
     expect(state.heldObstacleId).toBeUndefined()
+  })
+
+  it('the grab point sits just beyond the nose and follows pitch (matches the visible claw)', () => {
+    const env = makeEnv()
+    const level = { ...initialSimState(env), x: 5, y: 5, depth: 1, heading: 0 }
+    const grab = gripperPoint(level, blueRov2HeavyProfile)
+    expect(grab.x).toBeCloseTo(5 + blueRov2HeavyProfile.dimensions.length / 2 + 0.14, 2)
+    expect(grab.depth).toBeGreaterThan(1) // claw hangs below the centerline
+    const noseDown = gripperPoint({ ...level, pitch: -0.5 }, blueRov2HeavyProfile)
+    expect(noseDown.depth).toBeGreaterThan(grab.depth + 0.1) // pitch down -> claw genuinely deeper
+  })
+})
+
+describe('vertical obstacle contact (hitboxes match the 3D view)', () => {
+  const crateEnv = (): PracticeEnvironment =>
+    makeEnv({
+      obstacles: [{ id: 'crate', name: 'crate', shape: 'box', position: [10, 5, 1.6], size: [1.5, 1.5, 1.0] }],
+    })
+
+  it('descending onto a box lands ON it instead of being shoved out sideways', () => {
+    const env = crateEnv()
+    const start = { ...initialSimState(env), x: 10, y: 5, depth: 0.8, heading: 0 }
+    const state = run(env, { ...zeroDemand, heave: 1 }, 120, start)
+    expect(state.collidedWith).toBe('crate')
+    // Resting on the crate top (1.6 m) with the hull's half-height above it.
+    expect(state.depth).toBeCloseTo(1.6 - blueRov2HeavyProfile.dimensions.height / 2, 1)
+    expect(state.x).toBeCloseTo(10, 1) // not displaced sideways
+    expect(state.y).toBeCloseTo(5, 1)
+  })
+
+  it('ascending under a box bumps it from below', () => {
+    const env = crateEnv()
+    const start = { ...initialSimState(env), x: 10, y: 5, depth: 2.85, heading: 0 }
+    const state = run(env, { ...zeroDemand, heave: -1 }, 120, start)
+    expect(state.collidedWith).toBe('crate')
+    expect(state.depth).toBeCloseTo(2.6 + blueRov2HeavyProfile.dimensions.height / 2, 1)
+  })
+
+  it('hitting a box from the side still pushes the rover out horizontally', () => {
+    const env = crateEnv()
+    const start = { ...initialSimState(env), x: 8, y: 5, depth: 2.1, heading: 0 }
+    const state = run(env, { ...zeroDemand, surge: 1 }, 120, start)
+    expect(state.collidedWith).toBe('crate')
+    expect(state.x).toBeLessThan(10 - 0.75) // held outside the face
+    expect(state.depth).toBeGreaterThan(1.7) // not popped on top
   })
 })

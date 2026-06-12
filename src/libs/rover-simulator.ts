@@ -117,9 +117,12 @@ const TETHER_DRAG_PER_M = 0.05
 /** Trainer max lean (rad) so the vehicle cannot capsize. */
 const MAX_ANGLE = 1.0
 
-/** Claw geometry/limits. */
-const GRIPPER_REACH = 0.75 // meters from vehicle center to grab point
-const GRIPPER_RADIUS = 0.45 // meters around the grab point that can be grabbed
+/**
+ * Claw geometry/limits. Reach is derived from the profile so the grab point
+ * sits where the VISIBLE claw is (just beyond the nose, slightly below center).
+ */
+const GRIPPER_AHEAD = 0.14 // meters the grab point sits beyond the nose
+const GRIPPER_RADIUS = 0.25 // meters around the grab point that can be grabbed
 const GRIPPER_MAX_SIZE = 0.45 // largest plan-view obstacle dimension the claw can hold
 const GRIPPER_SPEED = 2.5 // closure units per second
 
@@ -134,15 +137,20 @@ export interface PoolPoint {
 }
 
 /**
- * The claw's grab point in pool coordinates (just ahead of the nose).
+ * The claw's grab point in pool coordinates. The offset is body-fixed at the
+ * visible claw's mount (nose + a jaw length ahead, below the centerline) and
+ * rotated through the full attitude, so it matches the 3D model — pitch the
+ * nose down and the grab point genuinely moves deeper.
  * @param {SimState} state Current state.
+ * @param {RoverProfile} profile Rover profile (sets nose distance and claw drop).
  * @returns {PoolPoint} Grab point.
  */
-export const gripperPoint = (state: SimState): PoolPoint => ({
-  x: state.x + GRIPPER_REACH * Math.cos(state.heading),
-  y: state.y + GRIPPER_REACH * Math.sin(state.heading),
-  depth: state.depth + 0.1, // claw sits slightly below the camera line
-})
+export const gripperPoint = (state: SimState, profile: RoverProfile): PoolPoint => {
+  const reach = Math.max(profile.dimensions.length, 0.15) / 2 + GRIPPER_AHEAD
+  const drop = Math.max(profile.dimensions.height, 0.1) * 0.28 // claw hangs below center (see practice-3d-rover)
+  const [dx, dy, dDown] = bodyToWorld(reach, 0, drop, state.roll, state.pitch, state.heading)
+  return { x: state.x + dx, y: state.y + dy, depth: state.depth + dDown }
+}
 
 /**
  * The tether's path from the surface attach point to the rover. Under an ice
@@ -341,9 +349,23 @@ export const stepSimulation = (
   }
 
   // Obstacles. Rings (hoops) collide as a torus and detect clean pass-throughs;
-  // boxes/cylinders resolve by pushing the rover out in plan view.
-  const roverTop = next.depth - profile.dimensions.height / 2
-  const roverBottom = next.depth + profile.dimensions.height / 2
+  // boxes/cylinders resolve along the axis of LEAST penetration — so the rover
+  // can land ON a crate or bump its head on one from below, instead of always
+  // being shoved out sideways (matches what the 3D view shows).
+  const halfH = profile.dimensions.height / 2
+  let roverTop = next.depth - halfH
+  let roverBottom = next.depth + halfH
+  const resolveVertical = (penUp: number, penDown: number, otop: number, obottom: number): void => {
+    if (penUp <= penDown) {
+      next.depth = Math.max(minDepth, otop - halfH) // settle on top
+      killVelToward(0, 0, 1)
+    } else {
+      next.depth = obottom + halfH // bump from below
+      killVelToward(0, 0, -1)
+    }
+    roverTop = next.depth - halfH
+    roverBottom = next.depth + halfH
+  }
   for (const obstacle of env.obstacles) {
     if (obstacle.id === state.heldObstacleId) continue // don't collide with what we hold
     const [ox, oy, otop] = obstacle.position
@@ -385,33 +407,41 @@ export const stepSimulation = (
 
     const obottom = otop + obstacle.size[2]
     if (roverBottom < otop || roverTop > obottom) continue
+    const penUp = roverBottom - otop // resolving up = landing on top
+    const penDown = obottom - roverTop // resolving down = bumping it from below
 
     if (obstacle.shape === 'cylinder') {
       const cdx = next.x - ox
       const cdy = next.y - oy
       const dist = Math.hypot(cdx, cdy)
       const minDist = (dist > 1e-6 ? footprint(cdx / dist, cdy / dist) : footprint(1, 0)) + obstacle.size[0] / 2
-      if (dist < minDist && dist > 1e-6) {
+      if (dist >= minDist || dist <= 1e-6) continue
+      if (Math.min(penUp, penDown) < minDist - dist) {
+        resolveVertical(penUp, penDown, otop, obottom)
+      } else {
         killVelToward(-cdx / dist, -cdy / dist, 0)
         next.x = ox + (cdx / dist) * minDist
         next.y = oy + (cdy / dist) * minDist
-        next.collidedWith = obstacle.name
       }
+      next.collidedWith = obstacle.name
     } else {
       const halfX = obstacle.size[0] / 2 + footprint(1, 0)
       const halfY = obstacle.size[1] / 2 + footprint(0, 1)
       const bdx = next.x - ox
       const bdy = next.y - oy
-      if (Math.abs(bdx) < halfX && Math.abs(bdy) < halfY) {
-        if (halfX - Math.abs(bdx) < halfY - Math.abs(bdy)) {
-          killVelToward(-Math.sign(bdx || 1), 0, 0)
-          next.x = ox + Math.sign(bdx || 1) * halfX
-        } else {
-          killVelToward(0, -Math.sign(bdy || 1), 0)
-          next.y = oy + Math.sign(bdy || 1) * halfY
-        }
-        next.collidedWith = obstacle.name
+      if (Math.abs(bdx) >= halfX || Math.abs(bdy) >= halfY) continue
+      const penX = halfX - Math.abs(bdx)
+      const penY = halfY - Math.abs(bdy)
+      if (Math.min(penUp, penDown) < Math.min(penX, penY)) {
+        resolveVertical(penUp, penDown, otop, obottom)
+      } else if (penX < penY) {
+        killVelToward(-Math.sign(bdx || 1), 0, 0)
+        next.x = ox + Math.sign(bdx || 1) * halfX
+      } else {
+        killVelToward(0, -Math.sign(bdy || 1), 0)
+        next.y = oy + Math.sign(bdy || 1) * halfY
       }
+      next.collidedWith = obstacle.name
     }
   }
 
@@ -422,7 +452,7 @@ export const stepSimulation = (
   if (!controls.gripperClosed && state.heldObstacleId) {
     next.heldObstacleId = undefined // released
   } else if (controls.gripperClosed && !state.heldObstacleId && next.gripper > 0.5) {
-    const grab = gripperPoint(next)
+    const grab = gripperPoint(next, profile)
     for (const obstacle of env.obstacles) {
       if (obstacle.shape === 'ring') continue
       if (Math.max(obstacle.size[0], obstacle.size[1]) > GRIPPER_MAX_SIZE) continue
@@ -440,7 +470,7 @@ export const stepSimulation = (
   if (next.heldObstacleId) {
     const held = env.obstacles.find((o) => o.id === next.heldObstacleId)
     if (held) {
-      const grab = gripperPoint(next)
+      const grab = gripperPoint(next, profile)
       held.position[0] = grab.x
       held.position[1] = grab.y
       held.position[2] = Math.max(0, grab.depth - held.size[2] / 2)

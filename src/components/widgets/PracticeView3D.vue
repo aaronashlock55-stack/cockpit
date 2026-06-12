@@ -147,6 +147,9 @@ const resize = (): void => {
   if (!renderer || !world || !container.value) return
   const { clientWidth: w, clientHeight: h } = container.value
   if (w === 0 || h === 0) return
+  // Full native pixel ratio (re-applied here so moving the window between
+  // displays tracks the new DPI) — crisp on Retina/4K instead of upscaled.
+  renderer.setPixelRatio(window.devicePixelRatio || 1)
   renderer.setSize(w, h, false)
   world.camera.aspect = w / h
   world.camera.updateProjectionMatrix()
@@ -181,7 +184,7 @@ const renderLoop = (): void => {
 const startRenderer = (): void => {
   if (renderer || !canvas.value) return
   renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  renderer.setPixelRatio(window.devicePixelRatio || 1)
   // Realism pass: filmic tone mapping + soft shadows.
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping

@@ -1,15 +1,14 @@
 import * as THREE from 'three'
 
 import {
-  buildAnimatedWater,
   buildBubbles,
-  buildCaustics,
   buildDriftingParticles,
   buildLightShafts,
   gradientEnvironment,
   tiledMaterial,
 } from '@/libs/practice-3d-fx'
 import { buildRoverModel } from '@/libs/practice-3d-rover'
+import { buildShaderCaustics, buildShaderWater } from '@/libs/practice-3d-shaders'
 import { tetherWorldPath } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
 import { type RoverProfile, defaultRoverProfile } from '@/types/rover-profile'
@@ -152,7 +151,7 @@ export const buildPracticeWorld = (
   }
 
   // Caustic shimmer above the floor + slanting light shafts from the surface.
-  const caustics = buildCaustics(L, W, D)
+  const caustics = buildShaderCaustics(L, W, D)
   scene.add(caustics.object)
   const lightShafts = buildLightShafts(L, W, D)
   scene.add(lightShafts.object)
@@ -164,7 +163,7 @@ export const buildPracticeWorld = (
   const waveAmp = env.flow?.type === 'waves' ? 1 + env.flow.speed * 3 : 1
 
   // Ice sheet with launch hole, or animated water surface seen from below.
-  let water: ReturnType<typeof buildAnimatedWater> | undefined
+  let water: ReturnType<typeof buildShaderWater> | undefined
   if (env.iceSheet) {
     const iceShape = new THREE.Shape()
     iceShape.moveTo(0, 0)
@@ -197,7 +196,7 @@ export const buildPracticeWorld = (
     ice.position.y = 0
     scene.add(ice)
   } else {
-    water = buildAnimatedWater(L, W, waveAmp)
+    water = buildShaderWater(L, W, waveAmp)
     scene.add(water.object)
   }
 
@@ -233,7 +232,10 @@ export const buildPracticeWorld = (
     for (const obstacle of env.obstacles) {
       const mesh = obstacleMeshes.get(obstacle.id)
       if (!mesh) continue
-      mesh.position.set(obstacle.position[0], -(obstacle.position[2] + obstacle.size[2] / 2), obstacle.position[1])
+      // Rings center at top + outer RADIUS (size[0]/2) — the same point the
+      // torus collision uses — so the visual hoop and its hitbox always agree.
+      const centerDepth = obstacle.position[2] + (obstacle.shape === 'ring' ? obstacle.size[0] : obstacle.size[2]) / 2
+      mesh.position.set(obstacle.position[0], -centerDepth, obstacle.position[1])
     }
   }
   syncObstacles()
