@@ -1,14 +1,9 @@
 import * as THREE from 'three'
 
-import {
-  buildBubbles,
-  buildDriftingParticles,
-  buildLightShafts,
-  gradientEnvironment,
-  tiledMaterial,
-} from '@/libs/practice-3d-fx'
+import { buildBubbles, buildDriftingParticles, buildLightShafts, gradientEnvironment } from '@/libs/practice-3d-fx'
 import { buildRoverModel } from '@/libs/practice-3d-rover'
 import { buildShaderCaustics, buildShaderWater } from '@/libs/practice-3d-shaders'
+import { buildPoolDetails, obstacleMaterial, tiledMaterial } from '@/libs/practice-3d-textures'
 import { smoothTowards } from '@/libs/practice-interp'
 import { tetherWorldPath } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
@@ -139,7 +134,7 @@ export const buildPracticeWorld = (
   scene.add(sun.target)
 
   // Floor.
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(L, W), tiledMaterial(0xffffff, L, W))
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(L, W), tiledMaterial(0xffffff, L, W, 'floor'))
   floor.name = 'floor'
   floor.rotation.x = -Math.PI / 2
   floor.position.set(L / 2, -D, W / 2)
@@ -158,7 +153,7 @@ export const buildPracticeWorld = (
   for (const spec of wallSpecs) {
     const wall = new THREE.Mesh(
       new THREE.PlaneGeometry(spec.size[0], spec.size[1]),
-      tiledMaterial(0xe8f4f8, spec.size[0], spec.size[1])
+      tiledMaterial(0xe8f4f8, spec.size[0], spec.size[1], 'wall')
     )
     wall.name = spec.name
     wall.position.set(...spec.pos)
@@ -166,6 +161,10 @@ export const buildPracticeWorld = (
     wall.receiveShadow = true
     scene.add(wall)
   }
+
+  // Lane lines + waterline band: the competition-pool dressing that also gives
+  // the eye strong optic-flow references for judging speed.
+  scene.add(buildPoolDetails(L, W, D))
 
   // Caustic shimmer above the floor + slanting light shafts from the surface.
   const caustics = buildShaderCaustics(L, W, D)
@@ -222,8 +221,7 @@ export const buildPracticeWorld = (
   const obstacleMeshes = new Map<string, THREE.Mesh>()
   for (const obstacle of env.obstacles) {
     const height = obstacle.size[2]
-    const color = new THREE.Color(obstacle.color ?? '#ffd24a')
-    const material = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.05 })
+    const material = obstacleMaterial(obstacle)
     let mesh: THREE.Mesh
     if (obstacle.shape === 'ring') {
       // Vertical hoop to fly through; torus is built in XY (normal +Z).

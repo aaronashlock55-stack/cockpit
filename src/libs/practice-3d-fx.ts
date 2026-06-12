@@ -2,10 +2,11 @@ import * as THREE from 'three'
 
 /**
  * Visual-effects helpers for the practice trainer's underwater world: drifting
- * particulate, light shafts, bubbles, and the procedural pool-tile materials.
- * (The water surface and floor caustics are GLSL shaders — see
- * practice-3d-shaders.ts.) Everything is canvas/procedural — no asset files —
- * and each builder returns its object plus a per-frame `update(t)` hook.
+ * particulate, light shafts, and bubbles. (The water surface and floor
+ * caustics are GLSL shaders — see practice-3d-shaders.ts; pool tiles and prop
+ * dressing live in practice-3d-textures.ts.) Everything is canvas/procedural —
+ * no asset files — and each builder returns its object plus a per-frame
+ * `update(t)` hook.
  */
 
 /** A built effect: the object to add plus its per-frame animator. */
@@ -14,56 +15,6 @@ export interface AnimatedEffect {
   object: THREE.Object3D
   /** Advance the effect to time t (seconds). */
   update: (t: number) => void
-}
-
-/**
- * Procedural pool-tile texture (canvas-based, no assets needed).
- * @param {string} base Base CSS color of the tiles.
- * @param {string} line Grout line CSS color.
- * @returns {THREE.Texture | null} The tile texture, or null outside a browser (tests).
- */
-const makeTileTexture = (base: string, line: string): THREE.Texture | null => {
-  if (typeof document === 'undefined') return null
-  const canvas = document.createElement('canvas')
-  canvas.width = 256
-  canvas.height = 256
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-  ctx.fillStyle = base
-  ctx.fillRect(0, 0, 256, 256)
-  ctx.strokeStyle = line
-  ctx.lineWidth = 4
-  for (let i = 0; i <= 256; i += 64) {
-    ctx.beginPath()
-    ctx.moveTo(i, 0)
-    ctx.lineTo(i, 256)
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.moveTo(0, i)
-    ctx.lineTo(256, i)
-    ctx.stroke()
-  }
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.wrapS = THREE.RepeatWrapping
-  texture.wrapT = THREE.RepeatWrapping
-  return texture
-}
-
-/**
- * Tiled pool material (floor/walls).
- * @param {number} color Base material color.
- * @param {number} length Surface length in meters (sets tile repeat).
- * @param {number} height Surface height in meters (sets tile repeat).
- * @returns {THREE.MeshStandardMaterial} The material.
- */
-export const tiledMaterial = (color: number, length: number, height: number): THREE.MeshStandardMaterial => {
-  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0 })
-  const texture = makeTileTexture('#9fc3d4', '#7da9bd')
-  if (texture) {
-    texture.repeat.set(Math.max(1, Math.round(length / 2)), Math.max(1, Math.round(height / 2)))
-    material.map = texture
-  }
-  return material
 }
 
 /**

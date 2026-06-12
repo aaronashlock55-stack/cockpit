@@ -18,6 +18,13 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
+  it('dresses the pool with lane lines and a waterline band', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    expect(world.scene.getObjectByName('lane-line')).toBeDefined()
+    expect(world.scene.getObjectByName('waterline-band')).toBeDefined()
+    world.dispose()
+  })
+
   it('builds an ice sheet (no water surface) for the MATE 2026 tank, and the float prop', () => {
     const world = buildPracticeWorld(mate2026IceTankEnvironment)
     const names = world.scene.children.map((c) => c.name)
