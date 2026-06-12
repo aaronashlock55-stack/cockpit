@@ -18,10 +18,11 @@ const makeEnv = (overrides: Partial<PracticeEnvironment> = {}): PracticeEnvironm
 
 /**
  * Run N sim steps with a constant demand.
- * @param env
- * @param demand
- * @param steps
- * @param start
+ * @param {PracticeEnvironment} env The environment to simulate in.
+ * @param {BodyAxes} demand Constant per-axis demand.
+ * @param {number} steps Number of 40 ms steps to run.
+ * @param {ReturnType<typeof initialSimState>} start Starting state.
+ * @returns {ReturnType<typeof stepSimulation>} Final state.
  */
 const run = (
   env: PracticeEnvironment,
