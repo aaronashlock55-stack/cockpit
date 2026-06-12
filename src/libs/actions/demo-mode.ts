@@ -22,16 +22,17 @@ import { activeRoverProfile, isDemoModeActive } from './demo-mode-state'
 const SIM_HZ = 25
 const dt = 1 / SIM_HZ
 
-// ArduSub flight modes (name -> custom_mode number), surfaced so the mode UI works in demo.
+// ArduSub flight modes keyed by the same enum names a real vehicle reports
+// (see ardusub.ts modesAvailable), so the mode UI behaves identically in demo.
 const arduSubModes = new Map<string, number>([
-  ['Manual', 19],
-  ['Stabilize', 0],
-  ['Depth Hold', 2],
-  ['Acro', 1],
-  ['PosHold', 16],
-  ['Surface', 9],
-  ['Guided', 4],
-  ['Auto', 3],
+  ['MANUAL', 19],
+  ['STABILIZE', 0],
+  ['ALT_HOLD', 2],
+  ['ACRO', 1],
+  ['POSHOLD', 16],
+  ['SURFACE', 9],
+  ['GUIDED', 4],
+  ['AUTO', 3],
 ])
 
 let simState: SimState = initialSimState()
@@ -105,7 +106,7 @@ export const startDemoMode = (): void => {
 
   // Present as a connected ArduSub so the UI behaves as if online.
   store.modes = arduSubModes
-  store.mode = 'Manual'
+  store.mode = 'MANUAL'
   store.isArmed = true
 
   demoDataLakeIds.forEach(ensureDataLakeVar)
