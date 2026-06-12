@@ -62,13 +62,52 @@ const subscribeToJoystick = async (): Promise<void> => {
   })
 }
 
+// Keyboard fallback: WASD = move, arrows = turn/depth (active while Practice mode runs).
+const pressedKeys = new Set<string>()
+
+const keyTargetIsTyping = (event: KeyboardEvent): boolean => {
+  const target = event.target as HTMLElement | null
+  return !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+}
+
+const onKeyDown = (event: KeyboardEvent): void => {
+  if (keyTargetIsTyping(event)) return
+  pressedKeys.add(event.key.toLowerCase())
+  // Keep arrows from scrolling the page while flying.
+  if (event.key.startsWith('Arrow')) event.preventDefault()
+}
+const onKeyUp = (event: KeyboardEvent): void => {
+  pressedKeys.delete(event.key.toLowerCase())
+}
+
 /**
- * Build the control demand for this tick from the gamepad (if active) or an automated pattern.
+ * Demand from the WASD/arrow keys, or null when nothing relevant is held.
+ * W/S = forward/back, A/D = strafe, ←/→ = turn, ↑/↓ = ascend/descend.
+ * @returns {BodyAxes | null} The keyboard demand, or null when idle.
+ */
+export const keyboardDemand = (): BodyAxes | null => {
+  const key = (k: string): number => (pressedKeys.has(k) ? 1 : 0)
+  const demand: BodyAxes = {
+    surge: key('w') - key('s'),
+    sway: key('d') - key('a'),
+    yaw: key('arrowright') - key('arrowleft'),
+    heave: key('arrowdown') - key('arrowup'), // heave positive = down
+    pitch: 0,
+    roll: 0,
+  }
+  const active = demand.surge || demand.sway || demand.yaw || demand.heave
+  return active ? demand : null
+}
+
+/**
+ * Build the control demand for this tick: gamepad if recently active, else the
+ * keyboard (WASD/arrows), else an automated patrol so demos always show motion.
  * @returns {BodyAxes} Per-axis demand in [-1, 1].
  */
 const currentDemand = (): BodyAxes => {
   const joystickActive = performance.now() - lastJoystickActivity < 1000 && latestAxes.length >= 2
   if (joystickActive) {
+    lastManualInput = performance.now()
     return {
       surge: -(latestAxes[1] ?? 0), // left stick vertical (up = forward)
       sway: latestAxes[0] ?? 0, // left stick horizontal
@@ -78,6 +117,18 @@ const currentDemand = (): BodyAxes => {
       roll: 0,
     }
   }
+
+  const keys = keyboardDemand()
+  if (keys) {
+    lastManualInput = performance.now()
+    return keys
+  }
+
+  // Hold still briefly after manual input stops instead of resuming the patrol immediately.
+  if (performance.now() - lastManualInput < 10000) {
+    return { surge: 0, sway: 0, heave: 0, yaw: 0, pitch: 0, roll: 0 }
+  }
+
   // Automated patrol: slow figure-eight-ish motion so HUDs/telemetry always move.
   const t = elapsed
   return {
@@ -89,6 +140,7 @@ const currentDemand = (): BodyAxes => {
     roll: 0.1 * Math.sin(t * 0.17),
   }
 }
+let lastManualInput = 0
 
 const ensureDataLakeVar = (id: string): void => {
   if (!getDataLakeVariableInfo(id)) {
@@ -121,6 +173,10 @@ export const startDemoMode = async (): Promise<void> => {
   simState = initialSimState(activePracticeEnvironment.value)
   elapsed = 0
   isDemoModeActive.value = true
+
+  // Keyboard fallback controls while practicing.
+  window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keyup', onKeyUp)
 
   // Present as a connected ArduSub so the UI behaves as if online.
   store.modes = arduSubModes
@@ -202,4 +258,7 @@ export const stopDemoMode = (): void => {
   loopTimer = undefined
   isDemoModeActive.value = false
   practiceSimReadout.value = null
+  window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('keyup', onKeyUp)
+  pressedKeys.clear()
 }
