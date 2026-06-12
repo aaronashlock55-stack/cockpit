@@ -106,6 +106,7 @@ Just read the PRs in the GitHub UI — the diffs and descriptions cover everythi
 | `npm install` errors / weird dependency state | Use **yarn**, not npm. |
 | Controller image stays generic | The pad model isn't in the VID:PID map yet — see the controller guide's "add a new controller" section. |
 | Video tiles show only spinners | Expected without a vehicle/RTSP source; the layouts still work. |
+| BlueOS says **"backend offline"** / Motors tab just spins | Expected — the frontend needs a backend + vehicle. To preview Motors with no rover, run a BlueOS backend with a **SITL** (simulated) autopilot and point the dev server at it: `BLUEOS_ADDRESS=http://<backend>/ yarn dev`. Full guide: `BlueOS/docs/BlueOS-2.0-SITL-Dev.md`. |
 
 ## Hardware verification (when at the rover)
 
