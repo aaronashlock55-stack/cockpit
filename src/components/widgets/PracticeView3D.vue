@@ -125,6 +125,7 @@ const renderLoop = (): void => {
       gripper: r.gripper ?? 0,
       cameraMode: cameraMode.value,
       speed: Number.isFinite(speed) ? speed : 0,
+      tetherPath: r.tetherPath,
     }
   )
   renderer.render(world.scene, world.camera)

@@ -1,6 +1,9 @@
 import { axisKeys, backMix, bodyToWorld, footprintRadius, hydroModel, worldToBody } from '@/libs/rover-hydro'
+import { type TetherWrap, applyTetherPhysics, tetherDeployedLength } from '@/libs/rover-tether'
 import { type PracticeEnvironment, waterDensity } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile } from '@/types/rover-profile'
+
+export { tetherDeployedLength } from '@/libs/rover-tether'
 
 /**
  * ROV motion model for Practice mode: a profile-derived Fossen 6-DOF rigid-body
@@ -58,6 +61,8 @@ export interface SimState {
   ringSides: Record<string, number>
   /** Name of the hoop cleanly passed through on this step, if any. */
   justPassed?: string
+  /** Points where the tether is currently snagged/bending around obstacles. */
+  tetherWraps: TetherWrap[]
   /** Claw closure, 0 = open .. 1 = closed (animated toward the commanded state). */
   gripper: number
   /** Id of the obstacle currently held by the claw, if any. */
@@ -96,6 +101,7 @@ export const initialSimState = (env: PracticeEnvironment): SimState => ({
   thrusterOutputs: [],
   thrust: zeroAxes(),
   ringSides: {},
+  tetherWraps: [],
   gripper: 0,
 })
 
@@ -148,21 +154,6 @@ export const tetherWorldPath = (rover: PoolPoint, env: PracticeEnvironment): Poo
   if (!env.iceSheet) return [attach, rover]
   const hole: PoolPoint = { x: env.iceSheet.holeCenter[0], y: env.iceSheet.holeCenter[1], depth: 0 }
   return [attach, hole, rover]
-}
-
-const segmentLength = (a: PoolPoint, b: PoolPoint): number => Math.hypot(b.x - a.x, b.y - a.y, b.depth - a.depth)
-
-/**
- * Deployed tether length along its real path (through the ice hole when present).
- * @param {SimState} state Current sim state.
- * @param {PracticeEnvironment} env The environment providing the attach point.
- * @returns {number} Deployed distance in meters.
- */
-export const tetherDeployedLength = (state: SimState, env: PracticeEnvironment): number => {
-  const path = tetherWorldPath({ x: state.x, y: state.y, depth: state.depth }, env)
-  let total = 0
-  for (let i = 1; i < path.length; i++) total += segmentLength(path[i - 1], path[i])
-  return total
 }
 
 /**
@@ -442,41 +433,8 @@ export const stepSimulation = (
     }
   }
 
-  // Tether constraint: the cable does not stretch. When the last path segment
-  // (from the ice hole, or the attach point) runs out of slack, the rover is
-  // held on that sphere and its outward momentum is killed — the real "tug".
-  if (env.tether.enabled) {
-    const path = tetherWorldPath({ x: next.x, y: next.y, depth: next.depth }, env)
-    const anchor = path[path.length - 2]
-    let priorLen = 0
-    for (let i = 1; i < path.length - 1; i++) priorLen += segmentLength(path[i - 1], path[i])
-    const budget = Math.max(env.tether.length - priorLen, 0.1)
-    const last = segmentLength(anchor, path[path.length - 1])
-    if (last > budget) {
-      const scale = budget / last
-      next.x = anchor.x + (next.x - anchor.x) * scale
-      next.y = anchor.y + (next.y - anchor.y) * scale
-      next.depth = Math.max(0, anchor.depth + (next.depth - anchor.depth) * scale)
-      // Kill the velocity component that points away from the anchor.
-      const away = [(next.x - anchor.x) / budget, (next.y - anchor.y) / budget, (next.depth - anchor.depth) / budget]
-      const [wx, wy, wz] = bodyToWorld(next.surgeVel, next.swayVel, next.heaveVel, next.roll, next.pitch, next.heading)
-      const outward = wx * away[0] + wy * away[1] + wz * away[2]
-      if (outward > 0) {
-        const [bu, bv, bw] = worldToBody(
-          wx - away[0] * outward,
-          wy - away[1] * outward,
-          wz - away[2] * outward,
-          next.roll,
-          next.pitch,
-          next.heading
-        )
-        next.surgeVel = bu
-        next.swayVel = bv
-        next.heaveVel = bw
-      }
-      next.collidedWith = next.collidedWith ?? 'tether (taut)'
-    }
-  }
+  // Tether: snag on obstacles + enforce the hard length limit (see rover-tether).
+  applyTetherPhysics(next, env)
 
   return next
 }

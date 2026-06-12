@@ -1,6 +1,7 @@
 import { unit } from 'mathjs'
 
 import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
+import { tetherFullPath } from '@/libs/rover-tether'
 // NOTE: the vehicle store and joystick manager are loaded lazily inside
 // startDemoMode(). Importing them statically from here (which the development
 // store pulls in at boot) changes the production bundle's module evaluation
@@ -220,6 +221,11 @@ export const startDemoMode = async (): Promise<void> => {
       depth,
       heading: simState.heading,
       tetherDeployed,
+      tetherPath: env.tether.enabled
+        ? tetherFullPath(simState.tetherWraps, { x: simState.x, y: simState.y, depth: simState.depth }, env).map(
+            (p) => [p.x, p.y, p.depth] as [number, number, number]
+          )
+        : undefined,
       collidedWith: simState.collidedWith,
       recentPass: elapsed < recentPassUntil ? recentPassName : undefined,
       gripper: simState.gripper,

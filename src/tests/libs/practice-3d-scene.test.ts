@@ -36,16 +36,31 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
-  it('positions the camera at the pose and looks toward +x at heading 0', () => {
+  it('mounts the first-person camera on the rover near the pose, looking +x at heading 0', () => {
     const world = buildPracticeWorld(openWaterEnvironment)
-    world.update({ x: 5, y: 7, depth: 2, heading: 0, pitch: 0, roll: 0 })
-    expect(world.camera.position.x).toBeCloseTo(5)
-    expect(world.camera.position.y).toBeCloseTo(-2) // depth 2 -> y = -2
-    expect(world.camera.position.z).toBeCloseTo(7)
+    world.update({ x: 5, y: 7, depth: 2, heading: 0, pitch: 0, roll: 0 }, { cameraMode: 'fp' })
+    // Camera is a child of the rover model now; its WORLD position is near the pose.
+    const worldPos = world.camera.getWorldPosition(new THREE.Vector3())
+    expect(worldPos.x).toBeCloseTo(5, 0) // within the rover's own length
+    expect(worldPos.y).toBeCloseTo(-2, 0)
+    expect(worldPos.z).toBeCloseTo(7, 0)
     const forward = new THREE.Vector3()
     world.camera.getWorldDirection(forward)
     expect(forward.x).toBeCloseTo(1, 1)
     expect(forward.z).toBeCloseTo(0, 1)
+    world.dispose()
+  })
+
+  it('camera is rigidly attached to the rover (rolls and pitches with the body)', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const rover = world.scene.children.find((c) => c.name === 'rover')!
+    world.update({ x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 }, { cameraMode: 'fp' })
+    expect(world.camera.parent).toBe(rover) // one rigid body
+    // Pitch the vehicle nose-up; the camera's view direction tilts up with it.
+    const level = world.camera.getWorldDirection(new THREE.Vector3())
+    world.update({ x: 5, y: 5, depth: 1, heading: 0, pitch: 0.5, roll: 0 }, { cameraMode: 'fp' })
+    const pitched = world.camera.getWorldDirection(new THREE.Vector3())
+    expect(pitched.y).toBeGreaterThan(level.y + 0.2)
     world.dispose()
   })
 
@@ -59,18 +74,19 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
-  it('contains the full rover model, hidden in first-person and visible in chase view', () => {
+  it('shows the rover model in both views; chase detaches the camera behind it', () => {
     const world = buildPracticeWorld(openWaterEnvironment)
     const rover = world.scene.children.find((c) => c.name === 'rover')!
     expect(rover).toBeDefined()
     const pose = { x: 10, y: 10, depth: 2, heading: 0, pitch: 0, roll: 0 }
     world.update(pose, { cameraMode: 'fp' })
-    expect(rover.visible).toBe(false)
-    expect(world.camera.position.x).toBeCloseTo(10) // FP camera rides the rover
+    expect(rover.visible).toBe(true) // you fly inside your own rover now
+    expect(world.camera.parent).toBe(rover)
     world.update(pose, { cameraMode: 'chase' })
     expect(rover.visible).toBe(true)
     expect(rover.position.x).toBeCloseTo(10)
-    expect(world.camera.position.x).toBeLessThan(10) // chase camera trails behind (heading 0 = +x)
+    expect(world.camera.parent).toBe(world.scene) // detached for the chase view
+    expect(world.camera.getWorldPosition(new THREE.Vector3()).x).toBeLessThan(10) // trails behind (heading 0 = +x)
     world.dispose()
   })
 

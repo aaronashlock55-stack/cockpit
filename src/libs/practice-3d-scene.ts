@@ -28,6 +28,8 @@ export interface WorldUpdateOptions {
   cameraMode?: 'fp' | 'chase'
   /** Vehicle speed (m/s) — drives propeller spin. */
   speed?: number
+  /** Full tether path (attach → hole → snag points → rover) as [x, y, depth] triples. */
+  tetherPath?: [number, number, number][]
 }
 
 /** Handle to the built world, used by the widget each frame. */
@@ -223,69 +225,22 @@ export const buildPracticeWorld = (
   tether.frustumCulled = false
   scene.add(tether)
 
-  // First-person camera: wide angle like a typical ROV camera. The camera is
-  // added to the scene so vehicle-fixed children (frame, claw) render with it.
+  // First-person camera MOUNTED ON the rover model — the camera and vehicle are
+  // one rigid body, like a real ROV's fixed forward camera. The mount sits at
+  // the nose so the hull is behind the lens; the view looks out over the frame
+  // edges and the claw. Chase view detaches the same camera behind the vehicle.
   const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.02, 250)
-  scene.add(camera)
+  const mountH = Math.max(profile.dimensions.height, 0.2)
+  const mountL = Math.max(profile.dimensions.length, 0.3)
+  const FP_MOUNT = new THREE.Vector3(0, mountH * 0.34, -mountL * 0.46)
+  const FP_TILT = -0.14 // look slightly down so the claw stays in frame
 
-  // Vehicle frame visible at the edges of view — real ROV cameras sit inside
-  // the frame, so the operator always sees a bit of their own vehicle.
-  const frameMaterial = new THREE.MeshStandardMaterial({ color: 0x12181c, roughness: 0.8 })
-  const accentMaterial = new THREE.MeshStandardMaterial({ color: 0x1b6f9e, roughness: 0.7 })
-  const frameGroup = new THREE.Group()
-  frameGroup.name = 'vehicle-frame'
-  const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.05), frameMaterial)
-  topBar.position.set(0, 0.165, -0.3)
-  frameGroup.add(topBar)
-  for (const side of [-1, 1]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.16, 0.22), accentMaterial)
-    rail.position.set(side * 0.225, -0.1, -0.28)
-    rail.rotation.z = side * -0.12
-    frameGroup.add(rail)
+  const mountCameraFp = (): void => {
+    if (camera.parent !== rover.group) rover.group.add(camera)
+    camera.position.copy(FP_MOUNT)
+    camera.rotation.set(FP_TILT, 0, 0)
   }
-  for (const side of [-1, 1]) {
-    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.05, 12), frameMaterial)
-    pod.rotation.x = Math.PI / 2
-    pod.position.set(side * 0.19, 0.145, -0.29)
-    frameGroup.add(pod)
-  }
-  camera.add(frameGroup)
-
-  // First-person claw: two jaws at the bottom-center of view.
-  const clawGroup = new THREE.Group()
-  clawGroup.name = 'claw'
-  clawGroup.position.set(0, -0.16, -0.3)
-  const jawPivots: THREE.Group[] = []
-  for (const side of [-1, 1]) {
-    const pivot = new THREE.Group()
-    pivot.position.x = side * 0.035
-    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.03, 0.16), frameMaterial)
-    jaw.position.set(0, 0, -0.08)
-    pivot.add(jaw)
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.026, 0.03), frameMaterial)
-    tip.position.set(side * -0.012, 0, -0.155)
-    tip.rotation.y = side * -0.35
-    pivot.add(tip)
-    clawGroup.add(pivot)
-    jawPivots.push(pivot)
-  }
-  const wrist = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.06, 12), frameMaterial)
-  wrist.rotation.x = Math.PI / 2
-  wrist.position.z = 0.04
-  clawGroup.add(wrist)
-  camera.add(clawGroup)
-
-  const setFpClawClosure = (closure: number): void => {
-    const angle = (1 - closure) * 0.5
-    jawPivots[0].rotation.y = -angle
-    jawPivots[1].rotation.y = angle
-  }
-  setFpClawClosure(0)
-
-  // Visible FP frame/claw scale with the active rover's real width.
-  const frameScale = Math.min(2, Math.max(0.7, profile.dimensions.width / 0.338))
-  frameGroup.scale.setScalar(frameScale)
-  clawGroup.scale.setScalar(frameScale)
+  mountCameraFp()
 
   const clock = new THREE.Clock()
   let elapsed = 0
@@ -309,14 +264,13 @@ export const buildPracticeWorld = (
     rover.group.rotateZ(pose.roll)
     rover.setClawClosure(opts.gripper ?? 0)
     rover.spinProps((2 + (opts.speed ?? 0) * 18) * delta * 6)
-    setFpClawClosure(opts.gripper ?? 0)
 
+    // The rover (and its mounted camera) are always part of the scene now.
+    rover.group.visible = true
     const chase = opts.cameraMode === 'chase'
-    rover.group.visible = chase
-    frameGroup.visible = !chase
-    clawGroup.visible = !chase
     if (chase) {
-      // Third-person: trail behind and above the rover, smoothed.
+      // Third-person: detach the camera and trail it behind/above the rover.
+      if (camera.parent !== scene) scene.add(camera)
       const dist = Math.max(1.6, roverL * 3.2)
       const desired = new THREE.Vector3(
         pose.x - Math.cos(pose.heading) * dist,
@@ -334,14 +288,10 @@ export const buildPracticeWorld = (
       camera.position.copy(chasePos)
       camera.lookAt(pose.x, -pose.depth, pose.y)
     } else {
+      // First-person: the camera rides on the rover as a rigid body, so it
+      // inherits the vehicle's heading/pitch/roll automatically.
       chaseInit = false
-      camera.position.set(pose.x, -pose.depth, pose.y)
-      // Three.js cameras look down -Z; a -90° base yaw makes heading 0 look toward
-      // pool +x, and heading increases clockwise (toward pool +y / three +Z).
-      camera.rotation.set(0, 0, 0)
-      camera.rotateY(-Math.PI / 2 - pose.heading)
-      camera.rotateX(pose.pitch)
-      camera.rotateZ(pose.roll)
+      mountCameraFp()
     }
 
     // Fog thickens slightly with depth for ambience.
@@ -356,10 +306,13 @@ export const buildPracticeWorld = (
       )
     }
 
-    // Tether rope: sag from slack, color from tautness, routed via the ice hole.
+    // Tether rope: sag from slack, color from tautness, routed via the ice hole
+    // and bent around any obstacles it has snagged on (from the sim's path).
     tether.visible = env.tether.enabled
     if (tether.visible) {
-      const path = tetherWorldPath({ x: pose.x, y: pose.y, depth: pose.depth }, env)
+      const path = opts.tetherPath
+        ? opts.tetherPath.map(([x, y, depth]) => ({ x, y, depth }))
+        : tetherWorldPath({ x: pose.x, y: pose.y, depth: pose.depth }, env)
       let deployed = 0
       const samples: THREE.Vector3[] = []
       for (let i = 1; i < path.length; i++) {

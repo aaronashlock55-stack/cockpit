@@ -252,6 +252,23 @@ describe('tether', () => {
     // Only 5 m of slack past the hole at (3,5): the rover cannot reach x = 10.
     expect(state.x).toBeLessThan(8.1)
   })
+
+  it('snags the tether on a post while flying around it', () => {
+    const env = makeEnv({
+      tether: { enabled: true, length: 100, attachPoint: [0, 5] },
+      obstacles: [{ id: 'post', name: 'Post', shape: 'cylinder', position: [6, 5, 0], size: [0.5, 0.5, 3] }],
+    })
+    // Start past the post and below it, then drive up and across so the cable
+    // (anchored at 0,5) catches on the post as the rover crosses to the far side.
+    let state = { ...initialSimState(env), x: 7, y: 3.5, depth: 1, heading: Math.PI / 2 }
+    let snagged = false
+    for (let i = 0; i < 120 && !snagged; i++) {
+      state = stepSimulation(state, blueRov2HeavyProfile, env, { ...zeroDemand, surge: 1 }, 0.04)
+      if (state.tetherWraps.length > 0) snagged = true
+    }
+    expect(snagged).toBe(true)
+    expect(state.tetherWraps[0].obstacleId).toBe('post')
+  })
 })
 
 describe('inertia and momentum (Fossen-style feel)', () => {

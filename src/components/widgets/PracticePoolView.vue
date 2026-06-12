@@ -109,6 +109,8 @@ const tetherTaut = computed(() => {
 const tetherPoints = computed(() => {
   if (!readout.value) return ''
   const r = readout.value
+  // Prefer the sim's real path (through the ice hole and around any snags).
+  if (r.tetherPath) return r.tetherPath.map(([x, y]) => `${x},${y}`).join(' ')
   return tetherWorldPath({ x: r.x, y: r.y, depth: r.depth }, env.value)
     .map((p) => `${p.x},${p.y}`)
     .join(' ')

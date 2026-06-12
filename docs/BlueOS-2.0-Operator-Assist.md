@@ -12,6 +12,29 @@
 | 8 | Pilot-assist quick controls (one-tap modes) | `3368214` |
 | 11 | Realism engine (profile-derived Fossen 6-DOF) + training course | — |
 | 12 | Full rover model + chase view, rigid-body contacts, visual realism | — |
+| 13 | Rigid-body camera (camera mounted on the rover) + tether snag physics | — |
+
+## Phase 13 — Rigid camera & tether snagging
+
+**Camera is part of the rover.** The first-person camera is now mounted ON the
+rover model as a fixed forward camera, so the camera and vehicle are **one rigid
+body** — it inherits the vehicle's heading, pitch and roll exactly like a real
+ROV's bolted-on cam (the view banks when you roll, dips when you pitch). The hull
+sits behind the lens, so you look out over your own frame edges and claw. Chase
+view (**C**) detaches the same camera behind the vehicle.
+
+**The tether snags on the environment.** The cable now catches on props and
+posts: when the run from the last anchor to the rover crosses an obstacle, a
+**wrap point** is pinned at that obstacle's edge and the cable bends around it —
+deployed length, drag, the hard length limit, and the rendered rope all follow
+the wrapped path. Drive back the way you came and it **unwinds**. So you can box
+yourself in by wrapping the tether around the gates, and tether management
+becomes a real part of piloting (the status line shows `tether (snagged)`).
+
+**For developers:** new `src/libs/rover-tether.ts` (wrap/snag/release + length
+limit, with `SimState.tetherWraps`); the full wrapped path is published on
+`practiceSimReadout.tetherPath` and drawn by both the 3D rope and the pool map.
+49 practice tests (70 total).
 
 ## Phase 12 — Full rover, chase view & visual realism
 
