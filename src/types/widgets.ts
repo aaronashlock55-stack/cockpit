@@ -109,6 +109,7 @@ export enum WidgetType {
   MissionControlPanel = 'MissionControlPanel',
   Plotter = 'Plotter',
   URLVideoPlayer = 'URLVideoPlayer',
+  VideoGrid = 'VideoGrid',
   VideoPlayer = 'VideoPlayer',
   VirtualHorizon = 'VirtualHorizon',
 }
@@ -876,6 +877,7 @@ export const isWidgetConfigurable: Record<WidgetType, boolean> = {
   [WidgetType.MiniWidgetsBar]: false,
   [WidgetType.Plotter]: true,
   [WidgetType.URLVideoPlayer]: true,
+  [WidgetType.VideoGrid]: false,
   [WidgetType.VideoPlayer]: true,
   [WidgetType.VirtualHorizon]: false,
   [WidgetType.MissionControlPanel]: false,
@@ -918,6 +920,7 @@ export const widgetHasOwnContextMenu: Record<WidgetType, boolean> = {
   [WidgetType.MiniWidgetsBar]: false,
   [WidgetType.Plotter]: false,
   [WidgetType.URLVideoPlayer]: false,
+  [WidgetType.VideoGrid]: false,
   [WidgetType.VideoPlayer]: false,
   [WidgetType.VirtualHorizon]: false,
   [WidgetType.MissionControlPanel]: false,
@@ -939,6 +942,7 @@ export const widgetDefaultSizes: Partial<Record<WidgetType, SizeRect2D>> = {
   [WidgetType.MiniWidgetsBar]: { width: 0.2, height: 0.1 },
   [WidgetType.Plotter]: { width: 0.4, height: 0.3 },
   [WidgetType.URLVideoPlayer]: { width: 0.5, height: 0.4 },
+  [WidgetType.VideoGrid]: { width: 1, height: 1 },
   [WidgetType.VideoPlayer]: { width: 1, height: 1 },
   [WidgetType.VirtualHorizon]: { width: 0.062, height: 0.118 },
 }

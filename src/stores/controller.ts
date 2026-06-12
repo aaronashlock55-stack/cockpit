@@ -394,17 +394,23 @@ export const useControllerStore = defineStore('controller', () => {
   const importJoystickMapping = async (joystick: Joystick, e: Event): Promise<void> => {
     const reader = new FileReader()
     reader.onload = (event: Event) => {
-      // @ts-ignore: We know the event type and need refactor of the event typing
-      const contents = event.target.result
-      const maybeProfile = JSON.parse(contents)
-      if (!maybeProfile['name'] || !maybeProfile['axes'] || !maybeProfile['buttons']) {
-        showDialog({ variant: 'error', message: 'Invalid joystick mapping file.', timer: 3000 })
-        return
+      try {
+        // @ts-ignore: We know the event type and need refactor of the event typing
+        const contents = event.target.result
+        const maybeProfile = JSON.parse(contents)
+        if (!maybeProfile['name'] || !maybeProfile['axes'] || !maybeProfile['buttons']) {
+          showDialog({ variant: 'error', message: 'Invalid joystick mapping file.', timer: 3000 })
+          return
+        }
+        cockpitStdMappings.value[joystick.model] = maybeProfile
+      } catch (error) {
+        showDialog({ variant: 'error', message: `Could not import joystick mapping. ${error}`, timer: 5000 })
       }
-      cockpitStdMappings.value[joystick.model] = maybeProfile
     }
     // @ts-ignore: We know the event type and need refactor of the event typing
-    reader.readAsText(e.target.files[0])
+    const file = e.target.files?.[0]
+    if (!file) return
+    reader.readAsText(file)
   }
 
   const exportFunctionsMapping = (protocolActionsMapping: JoystickProtocolActionsMapping): void => {
@@ -415,22 +421,32 @@ export const useControllerStore = defineStore('controller', () => {
   const importFunctionsMapping = async (e: Event): Promise<void> => {
     const reader = new FileReader()
     reader.onload = (event: Event) => {
-      // @ts-ignore: We know the event type and need refactor of the event typing
-      const contents = event.target.result
-      const maybeFunctionsMapping = JSON.parse(contents)
-      if (
-        !maybeFunctionsMapping['name'] ||
-        !maybeFunctionsMapping['axesCorrespondencies'] ||
-        !maybeFunctionsMapping['buttonsCorrespondencies']
-      ) {
-        showDialog({ message: 'Invalid functions mapping file.', variant: 'error', timer: 3000 })
-        return
+      try {
+        // @ts-ignore: We know the event type and need refactor of the event typing
+        const contents = event.target.result
+        const maybeFunctionsMapping = JSON.parse(contents)
+        // The store dereferences axesCorrespondencies and the 'regular' layer of
+        // buttonsCorrespondencies directly, so importing a mapping without them
+        // would crash later instead of failing here.
+        if (
+          !maybeFunctionsMapping['name'] ||
+          typeof maybeFunctionsMapping['axesCorrespondencies'] !== 'object' ||
+          typeof maybeFunctionsMapping['buttonsCorrespondencies'] !== 'object' ||
+          !maybeFunctionsMapping['buttonsCorrespondencies']['regular']
+        ) {
+          showDialog({ message: 'Invalid functions mapping file.', variant: 'error', timer: 3000 })
+          return
+        }
+        protocolMapping.value = maybeFunctionsMapping
+        showDialog({ message: 'Functions mapping imported successfully.', variant: 'success', timer: 2000 })
+      } catch (error) {
+        showDialog({ message: `Could not import functions mapping. ${error}`, variant: 'error', timer: 5000 })
       }
-      protocolMapping.value = maybeFunctionsMapping
-      showDialog({ message: 'Functions mapping imported successfully.', variant: 'success', timer: 2000 })
     }
     // @ts-ignore: We know the event type and need refactor of the event typing
-    reader.readAsText(e.target.files[0])
+    const file = e.target.files?.[0]
+    if (!file) return
+    reader.readAsText(file)
   }
 
   const actionsToCallFromJoystick = ref<CockpitActionsFunction[]>([])
