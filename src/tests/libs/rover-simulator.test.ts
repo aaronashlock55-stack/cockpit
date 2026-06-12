@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { hydroModel } from '@/libs/rover-hydro'
-import { initialSimState, mixToBodyForce, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
+import { hydroModel, mixToBodyForce } from '@/libs/rover-hydro'
+import { initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile, blueRov2HeavyProfile, blueRov2Profile } from '@/types/rover-profile'
 
@@ -75,13 +75,13 @@ describe('profile-derived hydrodynamics', () => {
   })
 
   it('a bigger frame has a lower top speed (more drag area)', () => {
-    const env = makeEnv()
+    const env = makeEnv({ pool: { length: 60, width: 10, depth: 3 } })
     const wide: RoverProfile = {
       ...blueRov2HeavyProfile,
       dimensions: { ...blueRov2HeavyProfile.dimensions, width: blueRov2HeavyProfile.dimensions.width * 2 },
     }
-    const stock = run(env, { ...zeroDemand, surge: 1 }, 500)
-    const barge = run(env, { ...zeroDemand, surge: 1 }, 500, initialSimState(env), wide)
+    const stock = run(env, { ...zeroDemand, surge: 1 }, 200)
+    const barge = run(env, { ...zeroDemand, surge: 1 }, 200, initialSimState(env), wide)
     expect(barge.surgeVel).toBeLessThan(stock.surgeVel)
   })
 
@@ -140,6 +140,38 @@ describe('stepSimulation environment physics', () => {
     const distance = Math.hypot(state.x - 5, state.y - 5)
     expect(distance).toBeGreaterThanOrEqual(0.1 + blueRov2HeavyProfile.dimensions.length / 2 - 0.01)
   })
+
+  it('meets obstacles with its real oriented footprint (sideways = narrower than nose-on)', () => {
+    const env = makeEnv({
+      obstacles: [{ id: 'f', name: 'post', shape: 'cylinder', position: [5, 5, 0], size: [0.2, 0.2, 3] }],
+    })
+    // Nose-on: stops at half-LENGTH + post radius.
+    const noseOn = run(env, { ...zeroDemand, surge: 1 }, 400, {
+      ...initialSimState(env),
+      x: 2,
+      y: 5,
+      depth: 1,
+      heading: 0,
+    })
+    // Side-on: nose pointing +y, strafing toward +x — stops at half-WIDTH + post radius.
+    const sideOn = run(env, { ...zeroDemand, sway: -1 }, 400, {
+      ...initialSimState(env),
+      x: 2,
+      y: 5,
+      depth: 1,
+      heading: Math.PI / 2,
+    })
+    const noseDist = Math.hypot(noseOn.x - 5, noseOn.y - 5)
+    const sideDist = Math.hypot(sideOn.x - 5, sideOn.y - 5)
+    expect(sideDist).toBeLessThan(noseDist - 0.03) // Heavy is 0.575 long but only 0.45 wide
+  })
+
+  it('wall contact kills the inward momentum (rigid-body thunk, no ghost-push)', () => {
+    const env = makeEnv()
+    const state = run(env, { ...zeroDemand, surge: 1 }, 700)
+    expect(state.x).toBeGreaterThan(env.pool.length - 0.4) // parked against the far wall
+    expect(Math.abs(state.surgeVel)).toBeLessThan(0.3) // velocity absorbed, not accumulated
+  })
 })
 
 describe('hoops (ring obstacles)', () => {
@@ -188,8 +220,9 @@ describe('tether', () => {
   })
 
   it('tether drag slows the rover as more tether is deployed', () => {
-    const short = makeEnv({ tether: { enabled: true, length: 100, attachPoint: [0, 5] } })
-    const none = makeEnv()
+    const pool = { length: 60, width: 10, depth: 3 }
+    const short = makeEnv({ pool, tether: { enabled: true, length: 100, attachPoint: [0, 5] } })
+    const none = makeEnv({ pool })
     const far = { ...initialSimState(short), x: 18, y: 5, depth: 1 } // ~18 m deployed
     const withTether = run(short, { ...zeroDemand, surge: 1 }, 100, { ...far })
     const withoutTether = run(none, { ...zeroDemand, surge: 1 }, 100, { ...far })
@@ -223,7 +256,7 @@ describe('tether', () => {
 
 describe('inertia and momentum (Fossen-style feel)', () => {
   it('accelerates gradually from rest (added mass + thruster spool)', () => {
-    const env = makeEnv()
+    const env = makeEnv({ pool: { length: 60, width: 10, depth: 3 } })
     const after200ms = run(env, { ...zeroDemand, surge: 1 }, 5)
     const terminal = run(env, { ...zeroDemand, surge: 1 }, 500)
     expect(after200ms.surgeVel).toBeLessThan(0.6 * terminal.surgeVel)

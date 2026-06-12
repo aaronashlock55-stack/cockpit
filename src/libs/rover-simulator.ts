@@ -1,4 +1,4 @@
-import { bodyToWorld, hydroModel, worldToBody } from '@/libs/rover-hydro'
+import { axisKeys, backMix, bodyToWorld, footprintRadius, hydroModel, worldToBody } from '@/libs/rover-hydro'
 import { type PracticeEnvironment, waterDensity } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile } from '@/types/rover-profile'
 
@@ -99,39 +99,7 @@ export const initialSimState = (env: PracticeEnvironment): SimState => ({
   gripper: 0,
 })
 
-const axisKeys: (keyof BodyAxes)[] = ['surge', 'sway', 'heave', 'yaw', 'pitch', 'roll']
 const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v))
-
-/**
- * Apply a control demand through the profile's motor mix to get achieved body force per axis.
- * Forward mix: each thruster output = sum_axis(contribution[axis] * demand[axis]), saturated to [-1,1].
- * Back mix: achieved force[axis] = sum_thruster(contribution[axis] * output), normalized by axis authority.
- * @param {RoverProfile} profile The rover profile providing the mix weights.
- * @param {BodyAxes} demand Control demand per axis, each in [-1, 1].
- * @returns {BodyAxes} Achieved normalized body force per axis, each ~[-1, 1].
- */
-export const mixToBodyForce = (profile: RoverProfile, demand: BodyAxes): BodyAxes => {
-  const outputs = profile.thrusters.map((t) =>
-    clamp(
-      axisKeys.reduce((sum, axis) => sum + t.contribution[axis] * demand[axis], 0),
-      -1,
-      1
-    )
-  )
-
-  const force = zeroAxes()
-  const authority = zeroAxes()
-  profile.thrusters.forEach((t, i) => {
-    axisKeys.forEach((axis) => {
-      force[axis] += t.contribution[axis] * outputs[i]
-      authority[axis] += Math.abs(t.contribution[axis])
-    })
-  })
-  axisKeys.forEach((axis) => {
-    force[axis] = authority[axis] > 1e-6 ? clamp(force[axis] / authority[axis], -1, 1) : 0
-  })
-  return force
-}
 
 /** Thruster spool time constant, seconds (T200-class response). */
 const THRUST_TAU = 0.25
@@ -145,13 +113,6 @@ const GRIPPER_REACH = 0.75 // meters from vehicle center to grab point
 const GRIPPER_RADIUS = 0.45 // meters around the grab point that can be grabbed
 const GRIPPER_MAX_SIZE = 0.45 // largest plan-view obstacle dimension the claw can hold
 const GRIPPER_SPEED = 2.5 // closure units per second
-
-/**
- * Approximate rover plan-view radius for collisions.
- * @param {RoverProfile} profile The rover profile providing dimensions.
- * @returns {number} Radius in meters.
- */
-const roverRadius = (profile: RoverProfile): number => Math.max(profile.dimensions.length, profile.dimensions.width) / 2
 
 /** A point in pool-local coordinates. */
 export interface PoolPoint {
@@ -268,15 +229,7 @@ export const stepSimulation = (
   })
 
   // Achieved normalized per-axis force for UI display.
-  axisKeys.forEach((axis) => {
-    let f = 0
-    let authority = 0
-    profile.thrusters.forEach((t, i) => {
-      f += t.contribution[axis] * outputs[i]
-      authority += Math.abs(t.contribution[axis])
-    })
-    next.thrust[axis] = authority > 1e-6 ? clamp(f / authority, -1, 1) : 0
-  })
+  next.thrust = backMix(profile, outputs)
 
   // Tether drag: extra quadratic damping that grows with deployed length.
   const tetherDragMult = env.tether.enabled ? 1 + TETHER_DRAG_PER_M * tetherDeployedLength(state, env) : 1
@@ -325,22 +278,46 @@ export const stepSimulation = (
   next.y = state.y + dy * dt
   next.depth = state.depth + dDepth * dt
 
-  const radius = roverRadius(profile)
+  // Rigid-body contact response: kill the velocity component pointing into a
+  // surface (world-frame direction d), so the rover thunks instead of ghosting.
+  const killVelToward = (kdx: number, kdy: number, kdz: number): void => {
+    const [wx, wy, wz] = bodyToWorld(next.surgeVel, next.swayVel, next.heaveVel, next.roll, next.pitch, next.heading)
+    const into = wx * kdx + wy * kdy + wz * kdz
+    if (into <= 0) return
+    const [u, v, w] = worldToBody(
+      wx - kdx * into,
+      wy - kdy * into,
+      wz - kdz * into,
+      next.roll,
+      next.pitch,
+      next.heading
+    )
+    next.surgeVel = u
+    next.swayVel = v
+    next.heaveVel = w
+  }
+  // Oriented footprint: the rover meets surfaces with its REAL length×width
+  // extent for the current heading (ellipse support), not a worst-case circle.
+  const footprint = (fdx: number, fdy: number): number => footprintRadius(profile, next.heading, fdx, fdy)
 
   // Pool walls.
-  if (next.x < radius || next.x > env.pool.length - radius) {
-    next.x = clamp(next.x, radius, env.pool.length - radius)
+  const rx = footprint(1, 0)
+  if (next.x < rx || next.x > env.pool.length - rx) {
+    killVelToward(next.x < rx ? -1 : 1, 0, 0)
+    next.x = clamp(next.x, rx, env.pool.length - rx)
     next.collidedWith = 'pool wall'
   }
-  if (next.y < radius || next.y > env.pool.width - radius) {
-    next.y = clamp(next.y, radius, env.pool.width - radius)
+  const ry = footprint(0, 1)
+  if (next.y < ry || next.y > env.pool.width - ry) {
+    killVelToward(0, next.y < ry ? -1 : 1, 0)
+    next.y = clamp(next.y, ry, env.pool.width - ry)
     next.collidedWith = 'pool wall'
   }
 
   // Floor and surface/ice.
   if (next.depth > env.pool.depth - profile.dimensions.height / 2) {
     next.depth = env.pool.depth - profile.dimensions.height / 2
-    next.heaveVel = Math.min(0, next.heaveVel)
+    killVelToward(0, 0, 1)
     next.collidedWith = 'pool floor'
   }
   let minDepth = 0
@@ -352,7 +329,7 @@ export const stepSimulation = (
   }
   if (next.depth < minDepth) {
     next.depth = minDepth
-    next.heaveVel = Math.max(0, next.heaveVel)
+    killVelToward(0, 0, -1)
     if (minDepth > 0) next.collidedWith = 'ice sheet'
   }
 
@@ -382,12 +359,15 @@ export const stepSimulation = (
       if (prevSide && side !== prevSide && planar < ringR - tubeR) next.justPassed = obstacle.name
       if (Math.abs(axial) > 0.05) next.ringSides[obstacle.id] = side
 
-      // Torus collision: distance from the hoop's center circle.
+      // Torus collision: distance from the hoop's center circle, against the
+      // rover's mean cross-section (half-width/half-height average).
+      const crossR = (Math.max(profile.dimensions.width, 0.15) + Math.max(profile.dimensions.height, 0.1)) / 4
       const q = Math.hypot(planar - ringR, axial)
-      if (q < tubeR + radius && q > 1e-6) {
+      if (q < tubeR + crossR && q > 1e-6) {
         const [pux, puy, puz] = planar > 1e-6 ? [lx / planar, ly / planar, rdz / planar] : [0, 0, 1]
         const [ccx, ccy, ccz] = [ox + pux * ringR, oy + puy * ringR, cz + puz * ringR] // nearest circle point
-        const push = (tubeR + radius) / q
+        const push = (tubeR + crossR) / q
+        killVelToward((ccx - next.x) / q, (ccy - next.y) / q, (ccz - next.depth) / q)
         next.x = ccx + (next.x - ccx) * push
         next.y = ccy + (next.y - ccy) * push
         next.depth = Math.max(0, ccz + (next.depth - ccz) * push)
@@ -403,21 +383,24 @@ export const stepSimulation = (
       const cdx = next.x - ox
       const cdy = next.y - oy
       const dist = Math.hypot(cdx, cdy)
-      const minDist = radius + obstacle.size[0] / 2
+      const minDist = (dist > 1e-6 ? footprint(cdx / dist, cdy / dist) : footprint(1, 0)) + obstacle.size[0] / 2
       if (dist < minDist && dist > 1e-6) {
+        killVelToward(-cdx / dist, -cdy / dist, 0)
         next.x = ox + (cdx / dist) * minDist
         next.y = oy + (cdy / dist) * minDist
         next.collidedWith = obstacle.name
       }
     } else {
-      const halfX = obstacle.size[0] / 2 + radius
-      const halfY = obstacle.size[1] / 2 + radius
+      const halfX = obstacle.size[0] / 2 + footprint(1, 0)
+      const halfY = obstacle.size[1] / 2 + footprint(0, 1)
       const bdx = next.x - ox
       const bdy = next.y - oy
       if (Math.abs(bdx) < halfX && Math.abs(bdy) < halfY) {
         if (halfX - Math.abs(bdx) < halfY - Math.abs(bdy)) {
+          killVelToward(-Math.sign(bdx || 1), 0, 0)
           next.x = ox + Math.sign(bdx || 1) * halfX
         } else {
+          killVelToward(0, -Math.sign(bdy || 1), 0)
           next.y = oy + Math.sign(bdy || 1) * halfY
         }
         next.collidedWith = obstacle.name

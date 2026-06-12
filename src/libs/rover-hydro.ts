@@ -1,4 +1,4 @@
-import { type RoverProfile } from '@/types/rover-profile'
+import { type BodyAxes, type RoverProfile } from '@/types/rover-profile'
 
 /**
  * Hydrodynamic model derivation for the practice simulator. Every coefficient
@@ -125,6 +125,70 @@ export const hydroModel = (profile: RoverProfile, density: number): HydroModel =
     buoyancyDownN: -((m / 1000) * (density - 1000) * GRAVITY + TRIM_N_PER_KG * m),
     thrusterN: profile.thrusterMaxForceN ?? DEFAULT_THRUSTER_N,
   }
+}
+
+/** Body axes in mixer order. */
+export const axisKeys: (keyof BodyAxes)[] = ['surge', 'sway', 'heave', 'yaw', 'pitch', 'roll']
+
+const zeroAxes = (): BodyAxes => ({ surge: 0, sway: 0, heave: 0, yaw: 0, pitch: 0, roll: 0 })
+const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v))
+
+/**
+ * Apply a control demand through the profile's motor mix to get achieved body force per axis.
+ * Forward mix: each thruster output = sum_axis(contribution[axis] * demand[axis]), saturated to [-1,1].
+ * Back mix: achieved force[axis] = sum_thruster(contribution[axis] * output), normalized by axis authority.
+ * @param {RoverProfile} profile The rover profile providing the mix weights.
+ * @param {BodyAxes} demand Control demand per axis, each in [-1, 1].
+ * @returns {BodyAxes} Achieved normalized body force per axis, each ~[-1, 1].
+ */
+export const mixToBodyForce = (profile: RoverProfile, demand: BodyAxes): BodyAxes => {
+  const outputs = profile.thrusters.map((t) =>
+    clamp(
+      axisKeys.reduce((sum, axis) => sum + t.contribution[axis] * demand[axis], 0),
+      -1,
+      1
+    )
+  )
+  return backMix(profile, outputs)
+}
+
+/**
+ * Achieved normalized per-axis force for a set of per-thruster outputs.
+ * @param {RoverProfile} profile The rover profile providing the mix weights.
+ * @param {number[]} outputs Per-thruster outputs, each in [-1, 1].
+ * @returns {BodyAxes} Achieved normalized body force per axis, each ~[-1, 1].
+ */
+export const backMix = (profile: RoverProfile, outputs: number[]): BodyAxes => {
+  const force = zeroAxes()
+  const authority = zeroAxes()
+  profile.thrusters.forEach((t, i) => {
+    axisKeys.forEach((axis) => {
+      force[axis] += t.contribution[axis] * (outputs[i] ?? 0)
+      authority[axis] += Math.abs(t.contribution[axis])
+    })
+  })
+  axisKeys.forEach((axis) => {
+    force[axis] = authority[axis] > 1e-6 ? clamp(force[axis] / authority[axis], -1, 1) : 0
+  })
+  return force
+}
+
+/**
+ * Effective half-extent of the rover's plan-view footprint along a world
+ * direction — the support width of the length×width ellipse, so the vehicle's
+ * REAL oriented size meets walls and obstacles (not a worst-case circle).
+ * @param {RoverProfile} profile The rover profile providing dimensions.
+ * @param {number} heading Vehicle heading, rad.
+ * @param {number} dirX World-direction x component (unit).
+ * @param {number} dirY World-direction y component (unit).
+ * @returns {number} Half-extent in meters along that direction.
+ */
+export const footprintRadius = (profile: RoverProfile, heading: number, dirX: number, dirY: number): number => {
+  const a = Math.max(profile.dimensions.length, 0.15) / 2
+  const b = Math.max(profile.dimensions.width, 0.15) / 2
+  const c = Math.cos(heading)
+  const s = Math.sin(heading)
+  return Math.hypot(a * (dirX * c + dirY * s), b * (-dirX * s + dirY * c))
 }
 
 /**

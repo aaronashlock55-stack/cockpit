@@ -77,9 +77,11 @@ export const blueRov2Profile: RoverProfile = {
   frame: 'BlueROV2',
   dimensions: { length: 0.457, width: 0.338, height: 0.254, massKg: 11 },
   schema: 'cockpit-rover-profile/v1',
+  // Vectored mix: surge [+ + + +], sway [- + + -], yaw [+ - + -] — mutually
+  // orthogonal patterns, so strafing produces no spin and turning no drift.
   thrusters: [
-    thruster(1, [0.15, -0.18, 0], 'cw', { surge: 0.7, sway: -0.7, yaw: -0.7 }),
-    thruster(2, [0.15, 0.18, 0], 'ccw', { surge: 0.7, sway: 0.7, yaw: 0.7 }),
+    thruster(1, [0.15, -0.18, 0], 'cw', { surge: 0.7, sway: -0.7, yaw: 0.7 }),
+    thruster(2, [0.15, 0.18, 0], 'ccw', { surge: 0.7, sway: 0.7, yaw: -0.7 }),
     thruster(3, [-0.15, -0.18, 0], 'ccw', { surge: 0.7, sway: 0.7, yaw: 0.7 }),
     thruster(4, [-0.15, 0.18, 0], 'cw', { surge: 0.7, sway: -0.7, yaw: -0.7 }),
     thruster(5, [0.12, -0.22, -0.06], 'cw', { heave: 1 }),
@@ -93,9 +95,10 @@ export const blueRov2HeavyProfile: RoverProfile = {
   frame: 'BlueROV2 Heavy',
   dimensions: { length: 0.575, width: 0.45, height: 0.254, massKg: 13.4 },
   schema: 'cockpit-rover-profile/v1',
+  // Same orthogonal vectored mix as the stock frame (see note above).
   thrusters: [
-    thruster(1, [0.15, -0.18, 0], 'cw', { surge: 0.7, sway: -0.7, yaw: -0.7 }),
-    thruster(2, [0.15, 0.18, 0], 'ccw', { surge: 0.7, sway: 0.7, yaw: 0.7 }),
+    thruster(1, [0.15, -0.18, 0], 'cw', { surge: 0.7, sway: -0.7, yaw: 0.7 }),
+    thruster(2, [0.15, 0.18, 0], 'ccw', { surge: 0.7, sway: 0.7, yaw: -0.7 }),
     thruster(3, [-0.15, -0.18, 0], 'ccw', { surge: 0.7, sway: 0.7, yaw: 0.7 }),
     thruster(4, [-0.15, 0.18, 0], 'cw', { surge: 0.7, sway: -0.7, yaw: -0.7 }),
     thruster(5, [0.18, -0.22, -0.06], 'cw', { heave: 1, pitch: 0.6, roll: -0.6 }),

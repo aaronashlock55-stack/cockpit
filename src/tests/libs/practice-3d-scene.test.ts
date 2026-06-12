@@ -59,6 +59,32 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
+  it('contains the full rover model, hidden in first-person and visible in chase view', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const rover = world.scene.children.find((c) => c.name === 'rover')!
+    expect(rover).toBeDefined()
+    const pose = { x: 10, y: 10, depth: 2, heading: 0, pitch: 0, roll: 0 }
+    world.update(pose, { cameraMode: 'fp' })
+    expect(rover.visible).toBe(false)
+    expect(world.camera.position.x).toBeCloseTo(10) // FP camera rides the rover
+    world.update(pose, { cameraMode: 'chase' })
+    expect(rover.visible).toBe(true)
+    expect(rover.position.x).toBeCloseTo(10)
+    expect(world.camera.position.x).toBeLessThan(10) // chase camera trails behind (heading 0 = +x)
+    world.dispose()
+  })
+
+  it('builds the animated water surface and floor caustics', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const names = world.scene.children.map((c) => c.name)
+    expect(names).toContain('water-surface')
+    expect(names).toContain('caustics')
+    const water = world.scene.children.find((c) => c.name === 'water-surface') as THREE.Mesh
+    // Segmented so it can wave (a flat quad would have 4 vertices).
+    expect(water.geometry.getAttribute('position').count).toBeGreaterThan(100)
+    world.dispose()
+  })
+
   it('shows the tether only while it is enabled (live toggle, no rebuild)', () => {
     const world = buildPracticeWorld(openWaterEnvironment) // tether disabled in this preset
     const tether = world.scene.children.find((c) => c.name === 'tether')

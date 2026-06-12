@@ -45,13 +45,11 @@
             :style="{ fill: obstacle.color ?? '#ffd24a' }"
           />
         </template>
-        <!-- Tether -->
-        <line
+        <!-- Tether (routed through the ice launch hole when there is one) -->
+        <polyline
           v-if="env.tether.enabled"
-          :x1="env.tether.attachPoint[0]"
-          :y1="env.tether.attachPoint[1]"
-          :x2="readout.x"
-          :y2="readout.y"
+          :points="tetherPoints"
+          fill="none"
           class="tether"
           :class="{ taut: tetherTaut }"
         />
@@ -77,6 +75,7 @@
 import { computed } from 'vue'
 
 import { activePracticeEnvironment, practiceSimReadout } from '@/libs/actions/demo-mode-state'
+import { tetherWorldPath } from '@/libs/rover-simulator'
 import { type PracticeObstacle } from '@/types/practice-environment'
 
 // Note: the widget system passes a :widget prop; this widget has no per-instance
@@ -105,6 +104,14 @@ const ringLine = (obstacle: PracticeObstacle): Record<string, number> => {
 const tetherTaut = computed(() => {
   if (!readout.value || !env.value.tether.enabled) return false
   return readout.value.tetherDeployed >= env.value.tether.length * 0.98
+})
+
+const tetherPoints = computed(() => {
+  if (!readout.value) return ''
+  const r = readout.value
+  return tetherWorldPath({ x: r.x, y: r.y, depth: r.depth }, env.value)
+    .map((p) => `${p.x},${p.y}`)
+    .join(' ')
 })
 </script>
 

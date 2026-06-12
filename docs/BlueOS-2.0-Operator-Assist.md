@@ -11,6 +11,36 @@
 | 7 | Video HUD overlay (heading/depth/attitude on the feed) | `57e9cd9` |
 | 8 | Pilot-assist quick controls (one-tap modes) | `3368214` |
 | 11 | Realism engine (profile-derived Fossen 6-DOF) + training course | — |
+| 12 | Full rover model + chase view, rigid-body contacts, visual realism | — |
+
+## Phase 12 — Full rover, chase view & visual realism
+
+**Your whole rover, in the water.** A complete 3D vehicle is now built from the
+imported `rover-profile.json`: hull sized from the real length/width/height,
+**every thruster at its real mounted position and orientation** (spinning
+props), foam, enclosure, headlights, and the claw. Press **C** (or the 🎥
+button) to switch between the **ROV camera** (first person) and a **chase
+view** that trails the vehicle — upload a different profile and the vehicle you
+see changes with it.
+
+**Rigid-body contacts.** The physics footprint is now the rover's real
+*oriented* length×width — strafing fits through gaps the nose can't — and every
+contact (walls, floor, ice, props, hoops, taut tether) **kills the momentum
+into the surface**, so the vehicle thunks and stops instead of ghost-sliding.
+This also fixed a mix bug where strafing made the presets spin.
+
+**The tether is a real rope.** A 3D tube that **sags in proportion to slack**,
+straightens and **turns red as it runs out**, and visibly routes through the
+ice launch hole — the same cues the top-down pool map shows.
+
+**Visual realism pass:** filmic (ACES) tone mapping, soft sun shadows, an
+**animated water surface**, **caustic shimmer** on the pool floor, drifting
+particulate, and physically-based materials throughout.
+
+**For developers:** `src/libs/practice-3d-rover.ts` (profile-driven vehicle),
+`src/libs/practice-3d-fx.ts` (water/caustics/particles), chase logic in
+`practice-3d-scene.ts`, footprint/contacts in `rover-simulator.ts` +
+`rover-hydro.ts` (`footprintRadius`). 43 vitest tests across sim/scene/rover.
 
 ## Phase 11 — Realism engine + training course
 

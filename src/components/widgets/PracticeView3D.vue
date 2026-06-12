@@ -6,7 +6,12 @@
     </div>
     <template v-else>
       <canvas ref="canvas" class="render-canvas" />
-      <VideoHudOverlay v-if="widget.options.showHud" />
+      <VideoHudOverlay v-if="widget.options.showHud && cameraMode === 'fp'" />
+      <div class="view-controls">
+        <button class="view-button" @click="toggleCamera">
+          {{ cameraMode === 'fp' ? '🎥 Chase cam' : '🤿 ROV cam' }}
+        </button>
+      </div>
       <div class="bottom-hints">
         <span v-if="readout.recentPass" class="passed">✔ {{ readout.recentPass }}</span>
         <span v-if="readout.collidedWith" class="collision">⚠ {{ readout.collidedWith }}</span>
@@ -15,7 +20,7 @@
         <span v-if="env.tether.enabled" class="keys" :class="{ taut: tetherTaut }">
           tether {{ readout.tetherDeployed.toFixed(1) }}/{{ env.tether.length }} m
         </span>
-        <span class="keys">W A S D move · ← → turn · ↑ ↓ depth · G claw</span>
+        <span class="keys">W A S D move · ← → turn · ↑ ↓ depth · G claw · C camera</span>
       </div>
     </template>
   </div>
@@ -43,6 +48,17 @@ const vehicleStore = useMainVehicleStore()
 const container = ref<HTMLDivElement>()
 const canvas = ref<HTMLCanvasElement>()
 const readout = computed(() => practiceSimReadout.value)
+const cameraMode = ref<'fp' | 'chase'>('fp')
+
+const toggleCamera = (): void => {
+  cameraMode.value = cameraMode.value === 'fp' ? 'chase' : 'fp'
+}
+
+const onViewKey = (event: KeyboardEvent): void => {
+  const target = event.target as HTMLElement | null
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+  if (!event.repeat && event.key.toLowerCase() === 'c' && practiceSimReadout.value) toggleCamera()
+}
 
 const heldName = computed(() => {
   const id = practiceSimReadout.value?.heldObstacleId
@@ -95,6 +111,7 @@ const renderLoop = (): void => {
   if (!renderer || !world) return
   const r = practiceSimReadout.value
   if (!r) return
+  const speed = vehicleStore.velocity.overall
   world.update(
     {
       x: r.x,
@@ -104,7 +121,11 @@ const renderLoop = (): void => {
       pitch: vehicleStore.attitude.pitch ?? 0,
       roll: vehicleStore.attitude.roll ?? 0,
     },
-    r.gripper ?? 0
+    {
+      gripper: r.gripper ?? 0,
+      cameraMode: cameraMode.value,
+      speed: Number.isFinite(speed) ? speed : 0,
+    }
   )
   renderer.render(world.scene, world.camera)
 }
@@ -113,12 +134,19 @@ const startRenderer = (): void => {
   if (renderer || !canvas.value) return
   renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  // Realism pass: filmic tone mapping + soft shadows.
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 1.05
+  renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
   buildWorld()
   renderLoop()
 }
 
 onMounted(() => {
   widget.value.options = { showHud: true, ...widget.value.options }
+  window.addEventListener('keydown', onViewKey)
   if (container.value) {
     resizeObserver = new ResizeObserver(() => resize())
     resizeObserver.observe(container.value)
@@ -140,6 +168,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (animationFrame !== undefined) cancelAnimationFrame(animationFrame)
+  window.removeEventListener('keydown', onViewKey)
   resizeObserver?.disconnect()
   world?.dispose()
   renderer?.dispose()
@@ -211,5 +240,24 @@ onBeforeUnmount(() => {
 .bottom-hints .keys.taut {
   color: rgb(255 110 110);
   font-weight: 700;
+}
+.view-controls {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 6;
+}
+.view-button {
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: rgb(255 255 255 / 90%);
+  background-color: rgb(0 0 0 / 45%);
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 8px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.view-button:hover {
+  background-color: rgb(0 0 0 / 65%);
 }
 </style>
