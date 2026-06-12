@@ -35,6 +35,32 @@ clone and run. Accept at:
 
 ---
 
+## 🖥 One desktop app — "BlueOS 2.0 Control" (no Chrome needed)
+
+Cockpit + BlueOS now ship as **one desktop application** with its own bundled
+runtime (Electron) — nothing to open in a browser:
+
+- **Cockpit** is the app itself (flying, video, joystick, the 3D trainer).
+- **BlueOS** lives inside it: ☰ menu → **Tools → BlueOS** embeds the vehicle's
+  full BlueOS interface (Motors tab + wizard, parameters, networking). The
+  address auto-fills from the vehicle connection — hit **Connect**.
+  (BlueOS's onboard services still run on the rover's Pi, as always — this
+  embeds its interface so you never leave the app.)
+
+Build it from `cockpit/` (after the install steps below):
+
+```bash
+yarn dev:electron                                   # run it live while developing
+COCKPIT_VERSION=2.0.0 yarn deploy:electron:mac:arm64:pr   # Apple-silicon .dmg (unsigned dev build)
+COCKPIT_VERSION=2.0.0 yarn deploy:electron:mac:x64:pr     # Intel-mac .dmg
+$env:COCKPIT_VERSION='2.0.0'; yarn deploy:electron:windows  # Windows installer (PowerShell)
+```
+
+The installer lands in `cockpit/dist/` (e.g. `BlueOS 2.0 Control-mac-arm64-2.0.0.dmg`).
+Unsigned dev builds: on macOS right-click → Open the first time.
+
+---
+
 ## Cockpit (start here — most is testable without a rover)
 
 ```bash

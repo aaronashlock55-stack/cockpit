@@ -173,8 +173,8 @@
         ]
       }
     ],
-    "appId": "org.bluerobotics.cockpit",
-    "productName": "Cockpit",
+    "appId": "org.blueos2.control",
+    "productName": "BlueOS 2.0 Control",
     "publish": {
       "provider": "github",
       "owner": "bluerobotics"
