@@ -10,6 +10,41 @@
 | 6.5 | Practice environments: pool/water/ice/tether/obstacles + MATE 2026 preset | `4d2b370` |
 | 7 | Video HUD overlay (heading/depth/attitude on the feed) | `57e9cd9` |
 | 8 | Pilot-assist quick controls (one-tap modes) | `3368214` |
+| 11 | Realism engine (profile-derived Fossen 6-DOF) + training course | — |
+
+## Phase 11 — Realism engine + training course
+
+**The engine.** The practice sim now runs a full **Fossen 6-DOF marine model**
+(`M ν̇ + D(ν) ν + g(η) = τ`) — the same formulation Stonefish and UNav-Sim use —
+and every coefficient is **derived from the active rover profile**, not tuned
+constants:
+
+- **Your rover's real weight and dimensions drive the physics.** Drag comes from
+  the actual projected areas (½ ρ Cd A), added mass from frame volume, rotational
+  inertia from mass + dimensions, and the righting wobble from the
+  buoyancy/gravity separation. Upload a profile with your rover's numbers and it
+  handles like your rover: heavier = more sluggish, bigger = lower top speed.
+- **Thrust and torque from the thruster layout.** Per-thruster max force
+  (optional `thrusterMaxForceN` in `rover-profile.json`, default 35 N ≈ a T200
+  at 14 V) × the mix weights; turning torques use each thruster's real moment
+  arm from its mounted position.
+- **Real attitude kinematics:** nose-down + forward thrust genuinely drives you
+  deeper, and buoyancy resolves into the body frame when leaned.
+
+**Tether, for real.** Toggle + length live in Settings → Development and apply
+immediately. Under an ice sheet the tether **routes through the launch hole**
+(deployed length, drag, and the 3D rendering all follow the real path); when it
+snaps taut your outward momentum is killed — the tug you feel on a real ROV.
+
+**Training course.** A new default environment, *"Training course — hoops, gates
+& pickups"*: three **hoops** at increasing depth/angle (a green **✔ flashes** on
+a clean pass; clip a hoop and you'll bounce off the rim), corner **slalom
+gates**, and **pickup objects** (cube, canister, profiling float) with a
+recovery basket to carry them back to.
+
+**For developers:** `src/libs/rover-hydro.ts` (model derivation, exported for
+tests), `src/libs/rover-simulator.ts` (the stepper), `ring` obstacle shape in
+`practice-environment.ts`. 33 vitest tests across sim + scene.
 
 ## Phase 6.5 — Practice environments (pool, water, tether, MATE props)
 

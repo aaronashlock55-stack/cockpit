@@ -21,8 +21,14 @@
         </template>
         <!-- Obstacles -->
         <template v-for="obstacle in env.obstacles" :key="obstacle.id">
+          <line
+            v-if="obstacle.shape === 'ring'"
+            v-bind="ringLine(obstacle)"
+            class="hoop"
+            :style="{ stroke: obstacle.color ?? '#56e08e' }"
+          />
           <circle
-            v-if="obstacle.shape === 'cylinder'"
+            v-else-if="obstacle.shape === 'cylinder'"
             :cx="obstacle.position[0]"
             :cy="obstacle.position[1]"
             :r="Math.max(obstacle.size[0] / 2, 0.15)"
@@ -60,6 +66,7 @@
         <span v-if="env.tether.enabled" :class="{ 'text-red-400': tetherTaut }">
           tether {{ readout.tetherDeployed.toFixed(1) }} / {{ env.tether.length }} m
         </span>
+        <span v-if="readout.recentPass" class="text-green-400">✔ {{ readout.recentPass }}</span>
         <span v-if="readout.collidedWith" class="text-red-400">⚠ {{ readout.collidedWith }}</span>
       </div>
     </template>
@@ -70,12 +77,30 @@
 import { computed } from 'vue'
 
 import { activePracticeEnvironment, practiceSimReadout } from '@/libs/actions/demo-mode-state'
+import { type PracticeObstacle } from '@/types/practice-environment'
 
 // Note: the widget system passes a :widget prop; this widget has no per-instance
 // options, so it is intentionally left undeclared (falls through as an attr).
 
 const env = computed(() => activePracticeEnvironment.value)
 const readout = computed(() => practiceSimReadout.value)
+
+/**
+ * A hoop seen from above is its edge-on line across the ring plane.
+ * @param {PracticeObstacle} obstacle The ring obstacle.
+ * @returns {Record<string, number>} SVG line endpoints.
+ */
+const ringLine = (obstacle: PracticeObstacle): Record<string, number> => {
+  const gamma = ((obstacle.yawDeg ?? 0) * Math.PI) / 180
+  const r = obstacle.size[0] / 2
+  const [dx, dy] = [-Math.sin(gamma) * r, Math.cos(gamma) * r]
+  return {
+    x1: obstacle.position[0] - dx,
+    y1: obstacle.position[1] - dy,
+    x2: obstacle.position[0] + dx,
+    y2: obstacle.position[1] + dy,
+  }
+}
 
 const tetherTaut = computed(() => {
   if (!readout.value || !env.value.tether.enabled) return false
@@ -127,6 +152,10 @@ const tetherTaut = computed(() => {
 .obstacle {
   stroke: rgb(0 0 0 / 40%);
   stroke-width: 0.05;
+}
+.hoop {
+  stroke-width: 0.14;
+  stroke-linecap: round;
 }
 .tether {
   stroke: rgb(255 255 100 / 70%);

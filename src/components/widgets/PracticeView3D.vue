@@ -8,9 +8,13 @@
       <canvas ref="canvas" class="render-canvas" />
       <VideoHudOverlay v-if="widget.options.showHud" />
       <div class="bottom-hints">
+        <span v-if="readout.recentPass" class="passed">✔ {{ readout.recentPass }}</span>
         <span v-if="readout.collidedWith" class="collision">⚠ {{ readout.collidedWith }}</span>
         <span v-if="heldName" class="holding">✊ holding: {{ heldName }}</span>
         <span v-else-if="(readout.gripper ?? 0) > 0.5" class="holding dim">claw closed</span>
+        <span v-if="env.tether.enabled" class="keys" :class="{ taut: tetherTaut }">
+          tether {{ readout.tetherDeployed.toFixed(1) }}/{{ env.tether.length }} m
+        </span>
         <span class="keys">W A S D move · ← → turn · ↑ ↓ depth · G claw</span>
       </div>
     </template>
@@ -22,7 +26,7 @@ import * as THREE from 'three'
 import { computed, onBeforeUnmount, onMounted, ref, toRefs, watch } from 'vue'
 
 import VideoHudOverlay from '@/components/VideoHudOverlay.vue'
-import { activePracticeEnvironment, practiceSimReadout } from '@/libs/actions/demo-mode-state'
+import { activePracticeEnvironment, activeRoverProfile, practiceSimReadout } from '@/libs/actions/demo-mode-state'
 import { type PracticeWorld, buildPracticeWorld } from '@/libs/practice-3d-scene'
 import { useMainVehicleStore } from '@/stores/mainVehicle'
 import type { Widget } from '@/types/widgets'
@@ -46,6 +50,26 @@ const heldName = computed(() => {
   return activePracticeEnvironment.value.obstacles.find((o) => o.id === id)?.name ?? id
 })
 
+const env = computed(() => activePracticeEnvironment.value)
+const tetherTaut = computed(() => {
+  if (!readout.value || !env.value.tether.enabled) return false
+  return readout.value.tetherDeployed >= env.value.tether.length * 0.98
+})
+
+// Rebuild signature: everything that changes the world's GEOMETRY. Obstacle
+// positions are excluded on purpose — the sim mutates them every frame while
+// an object is held, and meshes re-sync per frame anyway.
+const structuralSig = computed(() => {
+  const e = activePracticeEnvironment.value
+  return JSON.stringify([
+    e.name,
+    e.pool,
+    e.iceSheet,
+    e.tether.attachPoint,
+    e.obstacles.map((o) => [o.id, o.shape, o.size, o.yawDeg, o.color]),
+  ])
+})
+
 let renderer: THREE.WebGLRenderer | undefined
 let world: PracticeWorld | undefined
 let animationFrame: number | undefined
@@ -53,7 +77,7 @@ let resizeObserver: ResizeObserver | undefined
 
 const buildWorld = (): void => {
   world?.dispose()
-  world = buildPracticeWorld(activePracticeEnvironment.value)
+  world = buildPracticeWorld(activePracticeEnvironment.value, activeRoverProfile.value)
   resize()
 }
 
@@ -107,7 +131,9 @@ onMounted(() => {
     },
     { immediate: true, flush: 'post' }
   )
-  watch(activePracticeEnvironment, () => {
+  // Rebuild on any geometry change (preset switch, pool/ice/obstacle edits,
+  // rover profile change) — tether on/off is handled live without a rebuild.
+  watch([structuralSig, activeRoverProfile], () => {
     if (renderer) buildWorld()
   })
 })
@@ -177,5 +203,13 @@ onBeforeUnmount(() => {
 .bottom-hints .holding.dim {
   color: rgb(200 220 200 / 80%);
   font-weight: 400;
+}
+.bottom-hints .passed {
+  color: rgb(110 255 160);
+  font-weight: 700;
+}
+.bottom-hints .keys.taut {
+  color: rgb(255 110 110);
+  font-weight: 700;
 }
 </style>

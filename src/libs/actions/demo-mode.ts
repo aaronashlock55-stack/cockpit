@@ -41,6 +41,9 @@ const arduSubModes = new Map<string, number>([
 let simState: SimState = initialSimState(activePracticeEnvironment.value)
 let loopTimer: ReturnType<typeof setInterval> | undefined
 let elapsed = 0
+// Hoop-pass feedback: keep the last cleanly-passed hoop on screen briefly.
+let recentPassName: string | undefined
+let recentPassUntil = 0
 
 // Map anchor for converting pool-local meters to lat/lon (arbitrary but valid).
 const ORIGIN_LAT = 47.3977
@@ -205,6 +208,11 @@ export const startDemoMode = async (): Promise<void> => {
     const battery = 16.8 - 0.0008 * elapsed - 0.05 * Math.abs(simState.surgeVel)
     const tetherDeployed = tetherDeployedLength(simState, env)
 
+    if (simState.justPassed) {
+      recentPassName = simState.justPassed
+      recentPassUntil = elapsed + 3
+    }
+
     // Publish the pool-local readout for the practice widgets.
     practiceSimReadout.value = {
       x: simState.x,
@@ -213,6 +221,7 @@ export const startDemoMode = async (): Promise<void> => {
       heading: simState.heading,
       tetherDeployed,
       collidedWith: simState.collidedWith,
+      recentPass: elapsed < recentPassUntil ? recentPassName : undefined,
       gripper: simState.gripper,
       heldObstacleId: simState.heldObstacleId,
     }

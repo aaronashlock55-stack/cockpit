@@ -56,6 +56,8 @@ export interface RoverProfile {
   }
   /** The thrusters and their mixing weights. */
   thrusters: RoverThruster[]
+  /** Max thrust per thruster in Newtons (T200 ≈ 35 N at 14 V, ≈ 50 N at 16 V). Defaults to 35. */
+  thrusterMaxForceN?: number
   /** Schema marker for forward-compat / validation. */
   schema: 'cockpit-rover-profile/v1'
 }

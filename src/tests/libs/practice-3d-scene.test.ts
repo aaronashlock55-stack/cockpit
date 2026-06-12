@@ -2,7 +2,11 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 
 import { buildPracticeWorld } from '@/libs/practice-3d-scene'
-import { mate2026IceTankEnvironment, openWaterEnvironment } from '@/types/practice-environment'
+import {
+  mate2026IceTankEnvironment,
+  openWaterEnvironment,
+  trainingCourseEnvironment,
+} from '@/types/practice-environment'
 
 describe('buildPracticeWorld', () => {
   it('builds floor, four walls, and particles for any environment', () => {
@@ -52,6 +56,32 @@ describe('buildPracticeWorld', () => {
     world.camera.getWorldDirection(forward)
     expect(forward.z).toBeCloseTo(1, 1)
     expect(forward.x).toBeCloseTo(0, 1)
+    world.dispose()
+  })
+
+  it('shows the tether only while it is enabled (live toggle, no rebuild)', () => {
+    const world = buildPracticeWorld(openWaterEnvironment) // tether disabled in this preset
+    const tether = world.scene.children.find((c) => c.name === 'tether')
+    expect(tether).toBeDefined()
+    world.update({ x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 })
+    expect(tether!.visible).toBe(false)
+    openWaterEnvironment.tether.enabled = true
+    world.update({ x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 })
+    expect(tether!.visible).toBe(true)
+    openWaterEnvironment.tether.enabled = false
+    world.dispose()
+  })
+
+  it('builds hoop (ring) meshes for the training course', () => {
+    const world = buildPracticeWorld(trainingCourseEnvironment)
+    const names = world.scene.children.map((c) => c.name)
+    expect(names).toContain('obstacle-hoop-1')
+    expect(names).toContain('obstacle-basket')
+    const hoop = world.scene.children.find((c) => c.name === 'obstacle-hoop-1')!
+    const obstacle = trainingCourseEnvironment.obstacles.find((o) => o.id === 'hoop-1')!
+    world.update({ x: 1, y: 1, depth: 1, heading: 0, pitch: 0, roll: 0 })
+    // Hoop center sits at top depth + outer radius, mapped to -Y.
+    expect(hoop.position.y).toBeCloseTo(-(obstacle.position[2] + obstacle.size[2] / 2))
     world.dispose()
   })
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
+import { hydroModel } from '@/libs/rover-hydro'
 import { initialSimState, mixToBodyForce, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
-import { type BodyAxes, blueRov2HeavyProfile, blueRov2Profile } from '@/types/rover-profile'
+import { type BodyAxes, type RoverProfile, blueRov2HeavyProfile, blueRov2Profile } from '@/types/rover-profile'
 
 const zeroDemand: BodyAxes = { surge: 0, sway: 0, heave: 0, yaw: 0, pitch: 0, roll: 0 }
 
@@ -22,16 +23,18 @@ const makeEnv = (overrides: Partial<PracticeEnvironment> = {}): PracticeEnvironm
  * @param {BodyAxes} demand Constant per-axis demand.
  * @param {number} steps Number of 40 ms steps to run.
  * @param {ReturnType<typeof initialSimState>} start Starting state.
+ * @param {RoverProfile} profile Rover profile to simulate.
  * @returns {ReturnType<typeof stepSimulation>} Final state.
  */
 const run = (
   env: PracticeEnvironment,
   demand: BodyAxes,
   steps: number,
-  start = initialSimState(env)
+  start = initialSimState(env),
+  profile: RoverProfile = blueRov2HeavyProfile
 ): ReturnType<typeof stepSimulation> => {
   let state = start
-  for (let i = 0; i < steps; i++) state = stepSimulation(state, blueRov2HeavyProfile, env, demand, 0.04)
+  for (let i = 0; i < steps; i++) state = stepSimulation(state, profile, env, demand, 0.04)
   return state
 }
 
@@ -48,6 +51,45 @@ describe('mixToBodyForce', () => {
     const heavy = mixToBodyForce(blueRov2HeavyProfile, { ...zeroDemand, pitch: 1 })
     expect(Math.abs(stock.pitch)).toBeLessThan(0.01)
     expect(heavy.pitch).toBeGreaterThan(0.2)
+  })
+})
+
+describe('profile-derived hydrodynamics', () => {
+  it('derives drag and added mass from the real dimensions', () => {
+    const small = hydroModel(blueRov2Profile, 1000)
+    const big = hydroModel(blueRov2HeavyProfile, 1000)
+    expect(big.dragQuad.surge).toBeGreaterThan(small.dragQuad.surge)
+    expect(big.addedMass.heave).toBeGreaterThan(small.addedMass.heave)
+    expect(big.inertia.yaw).toBeGreaterThan(small.inertia.yaw)
+  })
+
+  it('a heavier rover accelerates more slowly', () => {
+    const env = makeEnv()
+    const heavy: RoverProfile = {
+      ...blueRov2HeavyProfile,
+      dimensions: { ...blueRov2HeavyProfile.dimensions, massKg: blueRov2HeavyProfile.dimensions.massKg * 3 },
+    }
+    const light = run(env, { ...zeroDemand, surge: 1 }, 25)
+    const loaded = run(env, { ...zeroDemand, surge: 1 }, 25, initialSimState(env), heavy)
+    expect(loaded.surgeVel).toBeLessThan(light.surgeVel)
+  })
+
+  it('a bigger frame has a lower top speed (more drag area)', () => {
+    const env = makeEnv()
+    const wide: RoverProfile = {
+      ...blueRov2HeavyProfile,
+      dimensions: { ...blueRov2HeavyProfile.dimensions, width: blueRov2HeavyProfile.dimensions.width * 2 },
+    }
+    const stock = run(env, { ...zeroDemand, surge: 1 }, 500)
+    const barge = run(env, { ...zeroDemand, surge: 1 }, 500, initialSimState(env), wide)
+    expect(barge.surgeVel).toBeLessThan(stock.surgeVel)
+  })
+
+  it('nose-down plus forward thrust drives the rover deeper (attitude kinematics)', () => {
+    const env = makeEnv()
+    const level = run(env, { ...zeroDemand, surge: 1 }, 25, { ...initialSimState(env), depth: 1 })
+    const nosedDown = run(env, { ...zeroDemand, surge: 1 }, 25, { ...initialSimState(env), depth: 1, pitch: -0.4 })
+    expect(nosedDown.depth).toBeGreaterThan(level.depth + 0.03)
   })
 })
 
@@ -98,7 +140,47 @@ describe('stepSimulation environment physics', () => {
     const distance = Math.hypot(state.x - 5, state.y - 5)
     expect(distance).toBeGreaterThanOrEqual(0.1 + blueRov2HeavyProfile.dimensions.length / 2 - 0.01)
   })
+})
 
+describe('hoops (ring obstacles)', () => {
+  const hoopEnv = (): PracticeEnvironment =>
+    makeEnv({
+      obstacles: [{ id: 'h1', name: 'Test hoop', shape: 'ring', position: [5, 5, 1.0], size: [1.4, 0.08, 1.4] }],
+    })
+
+  it('flags a clean pass through the hoop opening', () => {
+    const env = hoopEnv()
+    // Hoop center is at depth 1.0 + 0.7 = 1.7; approach dead-center along +x.
+    let state = { ...initialSimState(env), x: 3, y: 5, depth: 1.7, heading: 0 }
+    let passed: string | undefined
+    let hitHoop = false
+    for (let i = 0; i < 200; i++) {
+      state = stepSimulation(state, blueRov2HeavyProfile, env, { ...zeroDemand, surge: 1 }, 0.04)
+      if (state.justPassed) passed = state.justPassed
+      if (state.collidedWith === 'Test hoop') hitHoop = true
+    }
+    expect(passed).toBe('Test hoop')
+    expect(hitHoop).toBe(false)
+    expect(state.x).toBeGreaterThan(5) // really made it to the other side
+  })
+
+  it('collides with the hoop rim instead of phasing through it', () => {
+    const env = hoopEnv()
+    // Aim at the tube (offset across by the ring radius).
+    let state = { ...initialSimState(env), x: 3, y: 5.66, depth: 1.7, heading: 0 }
+    let hitHoop = false
+    let passed = false
+    for (let i = 0; i < 200; i++) {
+      state = stepSimulation(state, blueRov2HeavyProfile, env, { ...zeroDemand, surge: 1 }, 0.04)
+      if (state.collidedWith === 'Test hoop') hitHoop = true
+      if (state.justPassed) passed = true
+    }
+    expect(hitHoop).toBe(true)
+    expect(passed).toBe(false)
+  })
+})
+
+describe('tether', () => {
   it('enforces the tether length as a hard limit', () => {
     const env = makeEnv({ tether: { enabled: true, length: 5, attachPoint: [0, 5] } })
     const state = run(env, { ...zeroDemand, surge: 1 }, 2000)
@@ -113,6 +195,30 @@ describe('stepSimulation environment physics', () => {
     const withoutTether = run(none, { ...zeroDemand, surge: 1 }, 100, { ...far })
     expect(withTether.surgeVel).toBeLessThan(withoutTether.surgeVel)
   })
+
+  it('routes through the ice launch hole (longer real path than the straight line)', () => {
+    const env = makeEnv({
+      iceSheet: { thickness: 0.03, holeCenter: [3, 5], holeSize: 1 },
+      tether: { enabled: true, length: 50, attachPoint: [0, 5] },
+    })
+    const state = { ...initialSimState(env), x: 10, y: 5, depth: 2 }
+    // attach→hole = 3 m on the surface, hole→rover = hypot(7, 0, 2).
+    const expected = 3 + Math.hypot(7, 0, 2)
+    expect(tetherDeployedLength(state, env)).toBeCloseTo(expected, 5)
+    expect(expected).toBeGreaterThan(Math.hypot(10, 0, 2)) // longer than straight-line
+  })
+
+  it('the hole-routed tether limits range measured along the path', () => {
+    const env = makeEnv({
+      iceSheet: { thickness: 0.03, holeCenter: [3, 5], holeSize: 1 },
+      tether: { enabled: true, length: 8, attachPoint: [0, 5] },
+    })
+    const start = { ...initialSimState(env), x: 3, y: 5, depth: 1 }
+    const state = run(env, { ...zeroDemand, surge: 1 }, 1000, start)
+    expect(tetherDeployedLength(state, env)).toBeLessThanOrEqual(env.tether.length + 0.01)
+    // Only 5 m of slack past the hole at (3,5): the rover cannot reach x = 10.
+    expect(state.x).toBeLessThan(8.1)
+  })
 })
 
 describe('inertia and momentum (Fossen-style feel)', () => {
@@ -120,9 +226,9 @@ describe('inertia and momentum (Fossen-style feel)', () => {
     const env = makeEnv()
     const after200ms = run(env, { ...zeroDemand, surge: 1 }, 5)
     const terminal = run(env, { ...zeroDemand, surge: 1 }, 500)
-    expect(after200ms.surgeVel).toBeLessThan(0.5 * terminal.surgeVel)
-    expect(terminal.surgeVel).toBeGreaterThan(0.8) // believable top speed ~1 m/s
-    expect(terminal.surgeVel).toBeLessThan(1.6)
+    expect(after200ms.surgeVel).toBeLessThan(0.6 * terminal.surgeVel)
+    expect(terminal.surgeVel).toBeGreaterThan(0.7) // believable top speed ~1 m/s
+    expect(terminal.surgeVel).toBeLessThan(1.8)
   })
 
   it('coasts after the sticks are released instead of stopping dead', () => {
@@ -130,7 +236,7 @@ describe('inertia and momentum (Fossen-style feel)', () => {
     const cruising = run(env, { ...zeroDemand, surge: 1 }, 150)
     const peak = cruising.surgeVel
     const oneSecLater = run(env, zeroDemand, 25, { ...cruising })
-    expect(oneSecLater.surgeVel).toBeGreaterThan(0.3 * peak) // still gliding
+    expect(oneSecLater.surgeVel).toBeGreaterThan(0.2 * peak) // still gliding
     expect(oneSecLater.surgeVel).toBeLessThan(peak) // but slowing
   })
 
@@ -139,6 +245,15 @@ describe('inertia and momentum (Fossen-style feel)', () => {
     const disturbed = { ...initialSimState(env), pitch: 0.3 }
     const settled = run(env, zeroDemand, 250, disturbed)
     expect(Math.abs(settled.pitch)).toBeLessThan(0.03)
+  })
+
+  it('yaw spins up to a believable rate and keeps turning after release', () => {
+    const env = makeEnv()
+    const spinning = run(env, { ...zeroDemand, yaw: 1 }, 200)
+    expect(Math.abs(spinning.yawRate)).toBeGreaterThan(0.5) // rad/s
+    expect(Math.abs(spinning.yawRate)).toBeLessThan(4)
+    const later = run(env, zeroDemand, 10, { ...spinning })
+    expect(Math.abs(later.yawRate)).toBeGreaterThan(0.1) // angular momentum carries
   })
 })
 

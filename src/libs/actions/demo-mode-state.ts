@@ -15,7 +15,9 @@ export const isDemoModeActive = ref(false)
 export const activeRoverProfile = ref<RoverProfile>(defaultRoverProfile)
 
 /** The practice environment (pool, water, ice, tether, obstacles) the sim runs in. */
-export const activePracticeEnvironment = ref<PracticeEnvironment>(defaultPracticeEnvironment)
+// Cloned: the sim mutates obstacle positions (held objects), and the built-in
+// preset constants must stay pristine for later re-selection.
+export const activePracticeEnvironment = ref<PracticeEnvironment>(structuredClone(defaultPracticeEnvironment))
 
 /** Live readout for UI (pool-view widget); written by the demo driver each tick. */
 export interface PracticeSimReadout {
@@ -31,6 +33,8 @@ export interface PracticeSimReadout {
   tetherDeployed: number
   /** Whatever the rover is currently touching, if anything. */
   collidedWith?: string
+  /** Name of a hoop cleanly passed through in the last few seconds, if any. */
+  recentPass?: string
   /** Claw closure, 0 = open .. 1 = closed. */
   gripper?: number
   /** Id of the obstacle currently held by the claw, if any. */

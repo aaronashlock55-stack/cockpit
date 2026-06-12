@@ -17,12 +17,17 @@ export interface PracticeObstacle {
   id: string
   /** Display name, e.g. "Profiling float". */
   name: string
-  /** Plan-view shape used for collision and drawing. */
-  shape: 'box' | 'cylinder'
+  /** Shape used for collision and drawing. 'ring' is a vertical hoop to fly through. */
+  shape: 'box' | 'cylinder' | 'ring'
   /** Position in pool-local meters: x along length, y across width, top depth below surface. */
   position: [number, number, number]
-  /** Size in meters: box = [dx, dy, height]; cylinder = [diameter, diameter, height]. */
+  /**
+   * Size in meters: box = [dx, dy, height]; cylinder = [diameter, diameter, height];
+   * ring = [outerDiameter, tubeDiameter, outerDiameter] (vertical extent = outer diameter).
+   */
   size: [number, number, number]
+  /** Rotation about the vertical axis, degrees. For rings, 0 = fly through traveling along pool +x. */
+  yawDeg?: number
   /** Optional display color (CSS). */
   color?: string
 }
@@ -122,6 +127,104 @@ export const mateRegionalEnvironment: PracticeEnvironment = {
   schema: 'cockpit-practice-env/v1',
 }
 
+// Skills course: hoops to fly through, corner slalom gates, and objects to pick
+// up with the claw — simple, repeatable pilot-training tasks.
+export const trainingCourseEnvironment: PracticeEnvironment = {
+  name: 'Training course — hoops, gates & pickups',
+  pool: { length: 30, width: 15, depth: 4 },
+  water: { salinityPpt: 0, temperatureC: 24 },
+  tether: { enabled: true, length: 35, attachPoint: [0, 7.5] },
+  obstacles: [
+    // Hoops at increasing distance/depth (a ✔ flashes in the 3D view on a clean pass).
+    { id: 'hoop-1', name: 'Hoop 1', shape: 'ring', position: [7, 7.5, 1.0], size: [1.4, 0.08, 1.4], color: '#56e08e' },
+    {
+      id: 'hoop-2',
+      name: 'Hoop 2',
+      shape: 'ring',
+      position: [13, 5, 1.8],
+      size: [1.2, 0.08, 1.2],
+      yawDeg: 25,
+      color: '#56e08e',
+    },
+    {
+      id: 'hoop-3',
+      name: 'Hoop 3',
+      shape: 'ring',
+      position: [19, 10, 2.6],
+      size: [1.0, 0.08, 1.0],
+      yawDeg: -20,
+      color: '#56e08e',
+    },
+    // Corner slalom: post pairs to thread near the far corners.
+    {
+      id: 'gate-1l',
+      name: 'Gate 1',
+      shape: 'cylinder',
+      position: [24, 3, 2.0],
+      size: [0.11, 0.11, 2.0],
+      color: '#ff8c42',
+    },
+    {
+      id: 'gate-1r',
+      name: 'Gate 1',
+      shape: 'cylinder',
+      position: [24, 5, 2.0],
+      size: [0.11, 0.11, 2.0],
+      color: '#ff8c42',
+    },
+    {
+      id: 'gate-2l',
+      name: 'Gate 2',
+      shape: 'cylinder',
+      position: [26, 11, 2.0],
+      size: [0.11, 0.11, 2.0],
+      color: '#ff8c42',
+    },
+    {
+      id: 'gate-2r',
+      name: 'Gate 2',
+      shape: 'cylinder',
+      position: [26, 13, 2.0],
+      size: [0.11, 0.11, 2.0],
+      color: '#ff8c42',
+    },
+    // Pickup objects on the floor (grab with the claw) + a basket to carry them back to.
+    {
+      id: 'cube-1',
+      name: 'Practice cube',
+      shape: 'box',
+      position: [10, 11, 3.75],
+      size: [0.25, 0.25, 0.25],
+      color: '#ffd24a',
+    },
+    {
+      id: 'can-1',
+      name: 'Canister',
+      shape: 'cylinder',
+      position: [16, 3.5, 3.6],
+      size: [0.16, 0.16, 0.4],
+      color: '#e25563',
+    },
+    {
+      id: 'float-1',
+      name: 'Profiling float',
+      shape: 'cylinder',
+      position: [22, 7.5, 3.0],
+      size: [0.18, 0.18, 1.0],
+      color: '#ffd24a',
+    },
+    {
+      id: 'basket',
+      name: 'Recovery basket',
+      shape: 'box',
+      position: [3, 12, 3.5],
+      size: [1.2, 1.2, 0.5],
+      color: '#9aa7b0',
+    },
+  ],
+  schema: 'cockpit-practice-env/v1',
+}
+
 export const openWaterEnvironment: PracticeEnvironment = {
   name: 'Open practice pool (no props)',
   pool: { length: 50, width: 25, depth: 5 },
@@ -132,12 +235,13 @@ export const openWaterEnvironment: PracticeEnvironment = {
 }
 
 export const builtInPracticeEnvironments: PracticeEnvironment[] = [
+  trainingCourseEnvironment,
   mate2026IceTankEnvironment,
   mateRegionalEnvironment,
   openWaterEnvironment,
 ]
 
-export const defaultPracticeEnvironment = mate2026IceTankEnvironment
+export const defaultPracticeEnvironment = trainingCourseEnvironment
 
 /**
  * Validate an unknown value as a PracticeEnvironment. Throws with a clear reason on failure.

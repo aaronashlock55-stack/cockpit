@@ -1,25 +1,27 @@
+import { bodyToWorld, hydroModel, worldToBody } from '@/libs/rover-hydro'
 import { type PracticeEnvironment, waterDensity } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile } from '@/types/rover-profile'
 
 /**
- * ROV motion model for Practice mode, shaped after the marine-robotics standard
- * (Fossen model) used by simulators like Stonefish and UNav-Sim:
+ * ROV motion model for Practice mode: a profile-derived Fossen 6-DOF rigid-body
+ * model (M ν̇ + D(ν) ν + g(η) = τ) — the same formulation used by marine
+ * simulators like Stonefish and UNav-Sim.
  *
- *   (m + m_added) * v_dot = thrust - d_lin*v - d_quad*v|v| - restoring
+ * All coefficients are derived in rover-hydro.ts from the active rover profile
+ * (mass, dimensions, thruster layout) and the water density, so a heavier or
+ * bigger rover genuinely handles differently. Highlights:
+ * - Thrust from per-thruster max force × the profile's mix weights; torques use
+ *   each thruster's real moment arm from its mounted position.
+ * - Full attitude kinematics: nose-down + forward genuinely drives you deeper.
+ * - Environment: pool walls/floor, ice sheet with launch hole, obstacle and
+ *   hoop (ring) collisions with clean-pass detection, tether (routed through
+ *   the ice hole; drag grows with deployment; rigid length limit that also
+ *   kills outward momentum when it snaps taut).
+ * - Gripper: a claw at the nose that can grab small obstacles.
  *
- * - Added mass: water resists acceleration, so the rover feels heavy, not
- *   weightless — different per axis (heaving a flat frame drags far more water
- *   than surging).
- * - Quadratic + linear damping: release the sticks and the rover COASTS,
- *   shedding speed fast at first then drifting — like a real vehicle.
- * - Thruster spool: thrust ramps over ~0.3 s rather than stepping.
- * - Hydrostatic restoring: net buoyancy (water density vs. trim) acts as a
- *   force in heave; pitch/roll have an underdamped righting moment, so the
- *   vehicle bobs slightly when disturbed.
- * - Environment: pool walls/floor, ice sheet with launch hole, obstacle
- *   collisions, tether (drag grows with deployment; hard length limit).
- * - Gripper: a claw at the nose that can grab small obstacles; held objects
- *   follow the vehicle until released.
+ * Simplifications (deliberate): no Coriolis/centripetal coupling, Euler-rate ≈
+ * body-rate for attitude, and pitch/roll are clamped at ~57° so a training
+ * vehicle cannot capsize.
  */
 
 /** Simulated vehicle state (SI units, radians). */
@@ -34,9 +36,9 @@ export interface SimState {
   heading: number
   /** Roll in radians. */
   roll: number
-  /** Pitch in radians. */
+  /** Pitch in radians, positive nose-up. */
   pitch: number
-  /** Roll rate, rad/s (for the righting oscillation). */
+  /** Roll rate, rad/s. */
   rollRate: number
   /** Pitch rate, rad/s. */
   pitchRate: number
@@ -48,8 +50,14 @@ export interface SimState {
   heaveVel: number
   /** Yaw rate, rad/s. */
   yawRate: number
-  /** Spooled (lagged) thrust per axis, as normalized force [-1, 1]. */
+  /** Spooled per-thruster outputs [-1, 1] (lagging the commanded mix). */
+  thrusterOutputs: number[]
+  /** Achieved normalized force per axis [-1, 1], for UI display. */
   thrust: BodyAxes
+  /** Which side of each ring (by id) the rover was last on, for pass detection. */
+  ringSides: Record<string, number>
+  /** Name of the hoop cleanly passed through on this step, if any. */
+  justPassed?: string
   /** Claw closure, 0 = open .. 1 = closed (animated toward the commanded state). */
   gripper: number
   /** Id of the obstacle currently held by the claw, if any. */
@@ -85,7 +93,9 @@ export const initialSimState = (env: PracticeEnvironment): SimState => ({
   swayVel: 0,
   heaveVel: 0,
   yawRate: 0,
+  thrusterOutputs: [],
   thrust: zeroAxes(),
+  ringSides: {},
   gripper: 0,
 })
 
@@ -123,29 +133,12 @@ export const mixToBodyForce = (profile: RoverProfile, demand: BodyAxes): BodyAxe
   return force
 }
 
-// --- Dynamics constants (BlueROV2-class, tuned for believable training feel) ---
-
-const GRAVITY = 9.81
-/** Max thrust force per axis at |force|=1, Newtons (Newton-meters for yaw). */
-const F_MAX = { surge: 65, sway: 50, heave: 55, yaw: 14 }
-/** Added-mass factor per axis (fraction of dry mass dragged along as water). */
-const ADDED_MASS = { surge: 0.35, sway: 0.7, heave: 1.1 }
-/** Quadratic drag d_quad (N per (m/s)^2): sets terminal speeds (~1.15 / 0.75 / 0.5 m/s). */
-const D_QUAD = { surge: 48, sway: 85, heave: 210 }
-/** Linear (skin-friction) drag d_lin (N per m/s): kills the slow-coast tail. */
-const D_LIN = { surge: 4, sway: 6, heave: 10 }
-/** Yaw: inertia (kg*m^2, incl. added), quadratic + linear rotational drag. */
-const YAW_INERTIA_FACTOR = 0.16 // * massKg -> ~2 kg*m^2 for a BlueROV2
-const YAW_D_QUAD = 9
-const YAW_D_LIN = 1.2
-/** Pitch/roll righting: underdamped spring so the vehicle bobs when disturbed. */
-const RIGHTING_FREQ = 2.4 // rad/s natural frequency
-const RIGHTING_DAMPING = 0.55 // damping ratio < 1 -> slight oscillation
-const MAX_TILT = 0.35 // rad (~20 deg) demanded lean at full pitch/roll input
-/** Thruster spool time constant, seconds. */
-const THRUST_TAU = 0.3
-/** Positive trim: ROVs are ballasted slightly buoyant in fresh water, Newtons. */
-const TRIM_BUOYANCY_N = 0.8
+/** Thruster spool time constant, seconds (T200-class response). */
+const THRUST_TAU = 0.25
+/** Tether drag: quadratic-drag multiplier growth per meter deployed. */
+const TETHER_DRAG_PER_M = 0.05
+/** Trainer max lean (rad) so the vehicle cannot capsize. */
+const MAX_ANGLE = 1.0
 
 /** Claw geometry/limits. */
 const GRIPPER_REACH = 0.75 // meters from vehicle center to grab point
@@ -182,6 +175,36 @@ export const gripperPoint = (state: SimState): PoolPoint => ({
 })
 
 /**
+ * The tether's path from the surface attach point to the rover. Under an ice
+ * sheet the tether can only enter the water through the launch hole, so the
+ * path routes attach → hole → rover; otherwise it runs straight.
+ * @param {PoolPoint} rover Rover position.
+ * @param {PracticeEnvironment} env The environment (attach point, ice sheet).
+ * @returns {PoolPoint[]} Waypoints from attach point to rover.
+ */
+export const tetherWorldPath = (rover: PoolPoint, env: PracticeEnvironment): PoolPoint[] => {
+  const attach: PoolPoint = { x: env.tether.attachPoint[0], y: env.tether.attachPoint[1], depth: 0 }
+  if (!env.iceSheet) return [attach, rover]
+  const hole: PoolPoint = { x: env.iceSheet.holeCenter[0], y: env.iceSheet.holeCenter[1], depth: 0 }
+  return [attach, hole, rover]
+}
+
+const segmentLength = (a: PoolPoint, b: PoolPoint): number => Math.hypot(b.x - a.x, b.y - a.y, b.depth - a.depth)
+
+/**
+ * Deployed tether length along its real path (through the ice hole when present).
+ * @param {SimState} state Current sim state.
+ * @param {PracticeEnvironment} env The environment providing the attach point.
+ * @returns {number} Deployed distance in meters.
+ */
+export const tetherDeployedLength = (state: SimState, env: PracticeEnvironment): number => {
+  const path = tetherWorldPath({ x: state.x, y: state.y, depth: state.depth }, env)
+  let total = 0
+  for (let i = 1; i < path.length; i++) total += segmentLength(path[i - 1], path[i])
+  return total
+}
+
+/**
  * Advance the simulation one step inside the given environment.
  * @param {SimState} state Current state.
  * @param {RoverProfile} profile Rover profile providing mix + mass + dims.
@@ -199,62 +222,108 @@ export const stepSimulation = (
   dt: number,
   controls: SimControls = {}
 ): SimState => {
-  const mixedForce = mixToBodyForce(profile, demand)
-  const next: SimState = { ...state, thrust: { ...state.thrust }, collidedWith: undefined }
-  const mass = Math.max(profile.dimensions.massKg, 1)
+  const density = waterDensity(env.water.salinityPpt, env.water.temperatureC)
+  const model = hydroModel(profile, density)
+  const next: SimState = {
+    ...state,
+    thrust: { ...state.thrust },
+    ringSides: { ...state.ringSides },
+    justPassed: undefined,
+    collidedWith: undefined,
+  }
 
-  // Thruster spool: normalized thrust lags the commanded mix.
+  // Thruster outputs: forward-mix the demand, then spool toward the target.
+  const targets = profile.thrusters.map((t) =>
+    clamp(
+      axisKeys.reduce((sum, axis) => sum + t.contribution[axis] * demand[axis], 0),
+      -1,
+      1
+    )
+  )
+  const outputs =
+    state.thrusterOutputs.length === profile.thrusters.length
+      ? [...state.thrusterOutputs]
+      : profile.thrusters.map(() => 0)
   const spool = clamp(dt / THRUST_TAU, 0, 1)
+  targets.forEach((target, i) => {
+    outputs[i] += (target - outputs[i]) * spool
+  })
+  next.thrusterOutputs = outputs
+
+  // Forces (N) and torques (N·m) from the thrusters. Translation treats the mix
+  // weights as thrust-direction components; rotation uses each thruster's real
+  // moment arm from its mounted position (falls back to a frame-scaled arm).
+  const L = Math.max(profile.dimensions.length, 0.15)
+  const W = Math.max(profile.dimensions.width, 0.15)
+  let [fSurge, fSway, fHeave, tYaw, tPitch, tRoll] = [0, 0, 0, 0, 0, 0]
+  profile.thrusters.forEach((t, i) => {
+    const force = outputs[i] * model.thrusterN
+    const [px, py] = t.position ?? [0, 0, 0]
+    fSurge += force * t.contribution.surge
+    fSway += force * t.contribution.sway
+    fHeave += force * t.contribution.heave
+    tYaw += force * t.contribution.yaw * (Math.hypot(px, py) || L / 4)
+    tPitch += force * t.contribution.pitch * (Math.abs(px) || L / 4)
+    tRoll += force * t.contribution.roll * (Math.abs(py) || W / 4)
+  })
+
+  // Achieved normalized per-axis force for UI display.
   axisKeys.forEach((axis) => {
-    next.thrust[axis] += (mixedForce[axis] - next.thrust[axis]) * spool
+    let f = 0
+    let authority = 0
+    profile.thrusters.forEach((t, i) => {
+      f += t.contribution[axis] * outputs[i]
+      authority += Math.abs(t.contribution[axis])
+    })
+    next.thrust[axis] = authority > 1e-6 ? clamp(f / authority, -1, 1) : 0
   })
 
   // Tether drag: extra quadratic damping that grows with deployed length.
-  const attach = env.tether.attachPoint
-  const tdx = state.x - attach[0]
-  const tdy = state.y - attach[1]
-  const tetherDist = Math.sqrt(tdx * tdx + tdy * tdy + state.depth * state.depth)
-  const tetherDragMult = env.tether.enabled ? 1 + 0.06 * tetherDist : 1
+  const tetherDragMult = env.tether.enabled ? 1 + TETHER_DRAG_PER_M * tetherDeployedLength(state, env) : 1
 
-  // Net hydrostatic force in heave (positive down): negative = floats up.
-  // Vehicles are ballasted ~neutral in fresh water with slight positive trim.
-  const density = waterDensity(env.water.salinityPpt, env.water.temperatureC)
-  const displaced = mass / 1000 // m^3, neutral in fresh water at 15 C
-  const buoyancyDown = -(displaced * (density - 1000) * GRAVITY + TRIM_BUOYANCY_N)
+  // Hydrostatics: world-frame net buoyancy resolved into body axes, so a
+  // pitched vehicle feels it partly along surge — like the real thing.
+  const [bSurge, bSway, bHeave] = worldToBody(0, 0, model.buoyancyDownN, state.roll, state.pitch, state.heading)
 
-  // Fossen-style per-axis translation dynamics.
-  const accel = (axis: 'surge' | 'sway' | 'heave', vel: number, extraForce = 0): number => {
-    const totalMass = mass * (1 + ADDED_MASS[axis])
-    const thrustN = next.thrust[axis] * F_MAX[axis]
-    const drag = (D_QUAD[axis] * Math.abs(vel) * vel + D_LIN[axis] * vel) * tetherDragMult
-    return (thrustN + extraForce - drag) / totalMass
+  // Translational dynamics: M ν̇ = τ − D(ν) ν + g(η).
+  const accel = (axis: 'surge' | 'sway' | 'heave', vel: number, thrustN: number, hydroN: number): number => {
+    const drag = (model.dragQuad[axis] * Math.abs(vel) * vel + model.dragLin[axis] * vel) * tetherDragMult
+    return (thrustN + hydroN - drag) / (model.massKg + model.addedMass[axis])
   }
-  next.surgeVel = state.surgeVel + accel('surge', state.surgeVel) * dt
-  next.swayVel = state.swayVel + accel('sway', state.swayVel) * dt
-  next.heaveVel = state.heaveVel + accel('heave', state.heaveVel, buoyancyDown) * dt
+  next.surgeVel = state.surgeVel + accel('surge', state.surgeVel, fSurge, bSurge) * dt
+  next.swayVel = state.swayVel + accel('sway', state.swayVel, fSway, bSway) * dt
+  next.heaveVel = state.heaveVel + accel('heave', state.heaveVel, fHeave, bHeave) * dt
 
-  // Yaw dynamics.
-  const yawInertia = mass * YAW_INERTIA_FACTOR
-  const yawTorque = next.thrust.yaw * F_MAX.yaw
-  const yawDrag = YAW_D_QUAD * Math.abs(state.yawRate) * state.yawRate + YAW_D_LIN * state.yawRate
-  next.yawRate = state.yawRate + ((yawTorque - yawDrag) / yawInertia) * dt
-
-  // Pitch/roll: underdamped righting spring toward the demanded lean.
-  const spring = (angle: number, rate: number, target: number): [number, number] => {
-    const accelAng = RIGHTING_FREQ * RIGHTING_FREQ * (target - angle) - 2 * RIGHTING_DAMPING * RIGHTING_FREQ * rate
-    const newRate = rate + accelAng * dt
-    return [angle + newRate * dt, newRate]
+  // Rotational dynamics. Pitch/roll feel the hydrostatic righting moment.
+  const rotAccel = (axis: 'yaw' | 'pitch' | 'roll', rate: number, torque: number, righting: number): number => {
+    const drag = model.rotDragQuad[axis] * Math.abs(rate) * rate + model.rotDragLin[axis] * rate
+    return (torque + righting - drag) / model.inertia[axis]
   }
-  // Lean targets come from the MIXED thrust, so frames without pitch/roll
-  // authority (e.g. a stock BlueROV2) genuinely cannot lean on demand.
-  ;[next.pitch, next.pitchRate] = spring(state.pitch, state.pitchRate, clamp(next.thrust.pitch, -1, 1) * MAX_TILT)
-  ;[next.roll, next.rollRate] = spring(state.roll, state.rollRate, clamp(next.thrust.roll, -1, 1) * MAX_TILT)
+  next.yawRate = state.yawRate + rotAccel('yaw', state.yawRate, tYaw, 0) * dt
+  next.pitchRate =
+    state.pitchRate + rotAccel('pitch', state.pitchRate, tPitch, -model.rightingNm * Math.sin(state.pitch)) * dt
+  next.rollRate =
+    state.rollRate + rotAccel('roll', state.rollRate, tRoll, -model.rightingNm * Math.sin(state.roll)) * dt
 
-  // Integrate position.
+  // Attitude integration (Euler rate ≈ body rate), with the anti-capsize clamp.
   next.heading = (state.heading + next.yawRate * dt + 2 * Math.PI) % (2 * Math.PI)
-  next.x = state.x + (next.surgeVel * Math.cos(next.heading) - next.swayVel * Math.sin(next.heading)) * dt
-  next.y = state.y + (next.surgeVel * Math.sin(next.heading) + next.swayVel * Math.cos(next.heading)) * dt
-  next.depth = state.depth + next.heaveVel * dt
+  next.pitch = state.pitch + next.pitchRate * dt
+  next.roll = state.roll + next.rollRate * dt
+  if (Math.abs(next.pitch) > MAX_ANGLE) {
+    next.pitch = clamp(next.pitch, -MAX_ANGLE, MAX_ANGLE)
+    next.pitchRate = 0
+  }
+  if (Math.abs(next.roll) > MAX_ANGLE) {
+    next.roll = clamp(next.roll, -MAX_ANGLE, MAX_ANGLE)
+    next.rollRate = 0
+  }
+
+  // Position integration through the full body→world rotation: attitude
+  // genuinely steers the velocity (nose down + forward = descend).
+  const [dx, dy, dDepth] = bodyToWorld(next.surgeVel, next.swayVel, next.heaveVel, next.roll, next.pitch, next.heading)
+  next.x = state.x + dx * dt
+  next.y = state.y + dy * dt
+  next.depth = state.depth + dDepth * dt
 
   const radius = roverRadius(profile)
 
@@ -287,35 +356,69 @@ export const stepSimulation = (
     if (minDepth > 0) next.collidedWith = 'ice sheet'
   }
 
-  // Obstacles: plan-view overlap with depth-range check, resolved by pushing out.
+  // Obstacles. Rings (hoops) collide as a torus and detect clean pass-throughs;
+  // boxes/cylinders resolve by pushing the rover out in plan view.
   const roverTop = next.depth - profile.dimensions.height / 2
   const roverBottom = next.depth + profile.dimensions.height / 2
   for (const obstacle of env.obstacles) {
     if (obstacle.id === state.heldObstacleId) continue // don't collide with what we hold
     const [ox, oy, otop] = obstacle.position
+
+    if (obstacle.shape === 'ring') {
+      const gamma = ((obstacle.yawDeg ?? 0) * Math.PI) / 180
+      const [nx, ny] = [Math.cos(gamma), Math.sin(gamma)] // hoop plane normal (horizontal)
+      const outerR = obstacle.size[0] / 2
+      const tubeR = obstacle.size[1] / 2
+      const ringR = outerR - tubeR // center-circle radius
+      const cz = otop + outerR
+      const [rdx, rdy, rdz] = [next.x - ox, next.y - oy, next.depth - cz]
+      const axial = rdx * nx + rdy * ny
+      const [lx, ly] = [rdx - axial * nx, rdy - axial * ny] // in-plane horizontal part
+      const planar = Math.hypot(lx, ly, rdz)
+
+      // Clean pass: crossed the hoop plane while inside the opening.
+      const side = axial >= 0 ? 1 : -1
+      const prevSide = state.ringSides[obstacle.id]
+      if (prevSide && side !== prevSide && planar < ringR - tubeR) next.justPassed = obstacle.name
+      if (Math.abs(axial) > 0.05) next.ringSides[obstacle.id] = side
+
+      // Torus collision: distance from the hoop's center circle.
+      const q = Math.hypot(planar - ringR, axial)
+      if (q < tubeR + radius && q > 1e-6) {
+        const [pux, puy, puz] = planar > 1e-6 ? [lx / planar, ly / planar, rdz / planar] : [0, 0, 1]
+        const [ccx, ccy, ccz] = [ox + pux * ringR, oy + puy * ringR, cz + puz * ringR] // nearest circle point
+        const push = (tubeR + radius) / q
+        next.x = ccx + (next.x - ccx) * push
+        next.y = ccy + (next.y - ccy) * push
+        next.depth = Math.max(0, ccz + (next.depth - ccz) * push)
+        next.collidedWith = obstacle.name
+      }
+      continue
+    }
+
     const obottom = otop + obstacle.size[2]
     if (roverBottom < otop || roverTop > obottom) continue
 
     if (obstacle.shape === 'cylinder') {
-      const dx = next.x - ox
-      const dy = next.y - oy
-      const dist = Math.hypot(dx, dy)
+      const cdx = next.x - ox
+      const cdy = next.y - oy
+      const dist = Math.hypot(cdx, cdy)
       const minDist = radius + obstacle.size[0] / 2
       if (dist < minDist && dist > 1e-6) {
-        next.x = ox + (dx / dist) * minDist
-        next.y = oy + (dy / dist) * minDist
+        next.x = ox + (cdx / dist) * minDist
+        next.y = oy + (cdy / dist) * minDist
         next.collidedWith = obstacle.name
       }
     } else {
       const halfX = obstacle.size[0] / 2 + radius
       const halfY = obstacle.size[1] / 2 + radius
-      const dx = next.x - ox
-      const dy = next.y - oy
-      if (Math.abs(dx) < halfX && Math.abs(dy) < halfY) {
-        if (halfX - Math.abs(dx) < halfY - Math.abs(dy)) {
-          next.x = ox + Math.sign(dx || 1) * halfX
+      const bdx = next.x - ox
+      const bdy = next.y - oy
+      if (Math.abs(bdx) < halfX && Math.abs(bdy) < halfY) {
+        if (halfX - Math.abs(bdx) < halfY - Math.abs(bdy)) {
+          next.x = ox + Math.sign(bdx || 1) * halfX
         } else {
-          next.y = oy + Math.sign(dy || 1) * halfY
+          next.y = oy + Math.sign(bdy || 1) * halfY
         }
         next.collidedWith = obstacle.name
       }
@@ -331,6 +434,7 @@ export const stepSimulation = (
   } else if (controls.gripperClosed && !state.heldObstacleId && next.gripper > 0.5) {
     const grab = gripperPoint(next)
     for (const obstacle of env.obstacles) {
+      if (obstacle.shape === 'ring') continue
       if (Math.max(obstacle.size[0], obstacle.size[1]) > GRIPPER_MAX_SIZE) continue
       const [ox, oy, otop] = obstacle.position
       const centerDepth = otop + obstacle.size[2] / 2
@@ -355,30 +459,41 @@ export const stepSimulation = (
     }
   }
 
-  // Tether hard constraint: cannot exceed length; when taut, pulled back onto the sphere.
+  // Tether constraint: the cable does not stretch. When the last path segment
+  // (from the ice hole, or the attach point) runs out of slack, the rover is
+  // held on that sphere and its outward momentum is killed — the real "tug".
   if (env.tether.enabled) {
-    const dx = next.x - attach[0]
-    const dy = next.y - attach[1]
-    const dist3 = Math.sqrt(dx * dx + dy * dy + next.depth * next.depth)
-    if (dist3 > env.tether.length) {
-      const scale = env.tether.length / dist3
-      next.x = attach[0] + dx * scale
-      next.y = attach[1] + dy * scale
-      next.depth = next.depth * scale
+    const path = tetherWorldPath({ x: next.x, y: next.y, depth: next.depth }, env)
+    const anchor = path[path.length - 2]
+    let priorLen = 0
+    for (let i = 1; i < path.length - 1; i++) priorLen += segmentLength(path[i - 1], path[i])
+    const budget = Math.max(env.tether.length - priorLen, 0.1)
+    const last = segmentLength(anchor, path[path.length - 1])
+    if (last > budget) {
+      const scale = budget / last
+      next.x = anchor.x + (next.x - anchor.x) * scale
+      next.y = anchor.y + (next.y - anchor.y) * scale
+      next.depth = Math.max(0, anchor.depth + (next.depth - anchor.depth) * scale)
+      // Kill the velocity component that points away from the anchor.
+      const away = [(next.x - anchor.x) / budget, (next.y - anchor.y) / budget, (next.depth - anchor.depth) / budget]
+      const [wx, wy, wz] = bodyToWorld(next.surgeVel, next.swayVel, next.heaveVel, next.roll, next.pitch, next.heading)
+      const outward = wx * away[0] + wy * away[1] + wz * away[2]
+      if (outward > 0) {
+        const [bu, bv, bw] = worldToBody(
+          wx - away[0] * outward,
+          wy - away[1] * outward,
+          wz - away[2] * outward,
+          next.roll,
+          next.pitch,
+          next.heading
+        )
+        next.surgeVel = bu
+        next.swayVel = bv
+        next.heaveVel = bw
+      }
       next.collidedWith = next.collidedWith ?? 'tether (taut)'
     }
   }
 
   return next
-}
-
-/**
- * Straight-line tether deployment for UI display (distance from attach point).
- * @param {SimState} state Current sim state.
- * @param {PracticeEnvironment} env The environment providing the attach point.
- * @returns {number} Deployed distance in meters.
- */
-export const tetherDeployedLength = (state: SimState, env: PracticeEnvironment): number => {
-  const [ax, ay] = env.tether.attachPoint
-  return Math.sqrt((state.x - ax) ** 2 + (state.y - ay) ** 2 + state.depth ** 2)
 }

@@ -54,15 +54,19 @@ yarn dev                                  # → http://localhost:5173
 A flight-simulator-style ROV trainer that runs entirely offline:
 
 1. ☰ menu → **Settings → Development** → toggle **"Practice / Demo mode (no vehicle)"**.
-2. Pick a **rover profile** (BlueROV2 / Heavy) and an **environment** — choose
-   **"MATE 2026 — NRC Ice Tank (Worlds)"** (built from the real preview mission:
-   90×12×3 m tank, salt water, ice sheet with a 1 m launch hole, profiling float).
+2. Pick a **rover profile** (BlueROV2 / Heavy, or upload your own — the physics
+   derive from its real mass/dimensions/thrusters) and an **environment**:
+   - **"Training course — hoops, gates & pickups"** (the default): fly through
+     hoops (✔ flashes on a clean pass), thread the corner gates, and carry
+     objects to the recovery basket with the claw.
+   - **"MATE 2026 — NRC Ice Tank (Worlds)"** (built from the real preview mission:
+     90×12×3 m tank, salt water, ice sheet with a 1 m launch hole, profiling float).
 3. Back on the main screen, **Edit mode** → add the **PracticeView3D** widget (full-screen).
 4. Fly it:
    - **Gamepad**, or keyboard **W A S D** move · **← →** turn · **↑ ↓** depth · **G** claw.
-   - Real marine physics (momentum, coasting, buoyancy, tether drag), the vehicle
-     frame visible at the edges of view, and a **working claw** — grab the profiling
-     float and carry it back through the ice hole (the actual 2026 recovery task).
+   - Realistic marine physics (Fossen 6-DOF, momentum/coasting/buoyancy, real
+     tether that routes through the ice hole and tugs when taut), the vehicle
+     frame visible at the edges of view, and a **working claw**.
    - Add a **PracticePoolView** widget too for a top-down map of the pool.
 
 Also try: **PilotAssistPanel** mini-widget (one-tap Depth Hold / Stabilize), and any

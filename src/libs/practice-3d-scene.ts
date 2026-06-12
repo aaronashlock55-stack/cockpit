@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 
+import { tetherWorldPath } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
+import { type RoverProfile } from '@/types/rover-profile'
 
 /**
  * Builds the first-person 3D underwater world for Practice mode (the
@@ -92,9 +94,10 @@ const tiledMaterial = (color: number, length: number, height: number): THREE.Mes
 /**
  * Build the practice world for an environment.
  * @param {PracticeEnvironment} env The practice environment to model.
+ * @param {RoverProfile} profile Optional rover profile (scales the visible frame).
  * @returns {PracticeWorld} Scene, camera, per-frame updater, and disposer.
  */
-export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
+export const buildPracticeWorld = (env: PracticeEnvironment, profile?: RoverProfile): PracticeWorld => {
   const scene = new THREE.Scene()
   const { length: L, width: W, depth: D } = env.pool
 
@@ -178,10 +181,21 @@ export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
     const height = obstacle.size[2]
     const color = new THREE.Color(obstacle.color ?? '#ffd24a')
     const material = new THREE.MeshLambertMaterial({ color })
-    const mesh =
-      obstacle.shape === 'cylinder'
-        ? new THREE.Mesh(new THREE.CylinderGeometry(obstacle.size[0] / 2, obstacle.size[0] / 2, height, 24), material)
-        : new THREE.Mesh(new THREE.BoxGeometry(obstacle.size[0], height, obstacle.size[1]), material)
+    let mesh: THREE.Mesh
+    if (obstacle.shape === 'ring') {
+      // Vertical hoop to fly through; torus is built in XY (normal +Z).
+      const outerR = obstacle.size[0] / 2
+      const tubeR = obstacle.size[1] / 2
+      mesh = new THREE.Mesh(new THREE.TorusGeometry(outerR - tubeR, tubeR, 12, 36), material)
+      mesh.rotation.y = Math.PI / 2 - ((obstacle.yawDeg ?? 0) * Math.PI) / 180
+    } else if (obstacle.shape === 'cylinder') {
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(obstacle.size[0] / 2, obstacle.size[0] / 2, height, 24),
+        material
+      )
+    } else {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(obstacle.size[0], height, obstacle.size[1]), material)
+    }
     mesh.name = `obstacle-${obstacle.id}`
     obstacleMeshes.set(obstacle.id, mesh)
     scene.add(mesh)
@@ -195,16 +209,15 @@ export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
   }
   syncObstacles()
 
-  // Tether: a sagging curve from the attach point (surface) to the rover, updated each frame.
-  let tether: THREE.Line | undefined
-  if (env.tether.enabled) {
-    const tetherGeometry = new THREE.BufferGeometry()
-    tetherGeometry.setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
-    tether = new THREE.Line(tetherGeometry, new THREE.LineBasicMaterial({ color: 0xffe066 }))
-    tether.name = 'tether'
-    tether.frustumCulled = false
-    scene.add(tether)
-  }
+  // Tether: a sagging curve from the attach point to the rover, routed through
+  // the ice launch hole when there is one. Always built; visibility follows the
+  // live env.tether.enabled flag so the Settings toggle works without a rebuild.
+  const tetherGeometry = new THREE.BufferGeometry()
+  tetherGeometry.setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
+  const tether = new THREE.Line(tetherGeometry, new THREE.LineBasicMaterial({ color: 0xffe066 }))
+  tether.name = 'tether'
+  tether.frustumCulled = false
+  scene.add(tether)
 
   // Suspended particles for motion/depth perception.
   const particleCount = 400
@@ -290,7 +303,11 @@ export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
   }
   setClawClosure(0)
 
-  const attach = new THREE.Vector3(env.tether.attachPoint[0], 0, env.tether.attachPoint[1])
+  // Visible frame/claw scale with the active rover's real width.
+  const frameScale = profile ? Math.min(2, Math.max(0.7, profile.dimensions.width / 0.338)) : 1
+  frameGroup.scale.setScalar(frameScale)
+  clawGroup.scale.setScalar(frameScale)
+
   const update = (pose: CameraPose, gripperClosure = 0): void => {
     setClawClosure(gripperClosure)
     syncObstacles()
@@ -314,13 +331,20 @@ export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
       )
     }
 
-    // Tether: simple sag — midpoint dips below the straight line.
-    if (tether) {
-      const rover = camera.position.clone()
-      const mid = attach.clone().lerp(rover, 0.5)
-      mid.y -= 0.15 * attach.distanceTo(rover) * 0.5
-      const curve = new THREE.QuadraticBezierCurve3(attach, mid, rover)
-      tether.geometry.setFromPoints(curve.getPoints(24))
+    // Tether: follows the live toggle; sagging segments along the real path
+    // (attach → ice hole → rover when an ice sheet is present).
+    tether.visible = env.tether.enabled
+    if (tether.visible) {
+      const path = tetherWorldPath({ x: pose.x, y: pose.y, depth: pose.depth }, env)
+      const points: THREE.Vector3[] = []
+      for (let i = 1; i < path.length; i++) {
+        const a = new THREE.Vector3(path[i - 1].x, -path[i - 1].depth, path[i - 1].y)
+        const b = new THREE.Vector3(path[i].x, -path[i].depth, path[i].y)
+        const mid = a.clone().lerp(b, 0.5)
+        mid.y -= 0.075 * a.distanceTo(b) // simple catenary-ish sag
+        points.push(...new THREE.QuadraticBezierCurve3(a, mid, b).getPoints(16))
+      }
+      tether.geometry.setFromPoints(points)
     }
   }
 
