@@ -335,6 +335,14 @@ describe('inertia and momentum (Fossen-style feel)', () => {
     expect(Math.abs(settled.pitch)).toBeLessThan(0.03)
   })
 
+  it('counter-thrust stops the rover much faster than coasting (weight feel)', () => {
+    const env = makeEnv({ pool: { length: 60, width: 10, depth: 3 } })
+    const cruise = run(env, { ...zeroDemand, surge: 1 }, 100)
+    const coasting = run(env, zeroDemand, 13, { ...cruise }) // ~0.5 s hands-off
+    const braked = run(env, { ...zeroDemand, surge: -1 }, 13, { ...cruise }) // ~0.5 s reverse
+    expect(Math.abs(braked.surgeVel)).toBeLessThan(0.45 * Math.abs(coasting.surgeVel))
+  })
+
   it('yaw spins up to a believable rate and keeps turning after release', () => {
     const env = makeEnv()
     const spinning = run(env, { ...zeroDemand, yaw: 1 }, 200)

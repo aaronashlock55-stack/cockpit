@@ -13,16 +13,19 @@ export const GRAVITY = 9.81
 const CD = { surge: 0.9, sway: 1.1, heave: 2.2 }
 /** Added-mass coefficient per axis (fraction of frame-volume water entrained). */
 const CA = { surge: 0.1, sway: 0.2, heave: 0.3 }
-/** Linear (skin friction) drag per m² of projected area, N/(m/s). */
-const LIN_DRAG_PER_AREA = 55
+/** Linear (skin friction) drag per m² of projected area, N/(m/s). Tuned high
+ * enough that low-speed coasting bleeds off convincingly (quadratic drag
+ * vanishes near zero); top speed barely changes — quadratic dominates there. */
+const LIN_DRAG_PER_AREA = 85
 /** Rotational added inertia as a fraction of dry inertia. */
 const ROT_ADDED = 1.0
 /** Rotational quadratic drag coefficient. */
 const CD_ROT = 2.0
 /** Buoyancy-to-gravity center separation as a fraction of vehicle height. */
 const BG_FRACTION = 0.18
-/** Pitch/roll damping ratio (<1 → slight righting wobble, like a real ROV). */
-const ROT_DAMPING = 0.5
+/** Pitch/roll damping ratio: near-critical so the vehicle settles decisively
+ * after a maneuver (planted, "heavy" feel) instead of visibly wobbling. */
+const ROT_DAMPING = 0.85
 /** Positive ballast trim, N per kg (ROVs are trimmed slightly buoyant). */
 const TRIM_N_PER_KG = 0.07
 /** Default per-thruster max force, N (T200 at ~14 V). */
@@ -116,7 +119,7 @@ export const hydroModel = (profile: RoverProfile, density: number): HydroModel =
       roll: 0.5 * density * CD_ROT * area.heave * (W / 2) ** 3 * 0.7,
     },
     rotDragLin: {
-      yaw: 0.6 * inertia.yaw,
+      yaw: 0.8 * inertia.yaw,
       pitch: 2 * ROT_DAMPING * Math.sqrt(rightingNm * inertia.pitch),
       roll: 2 * ROT_DAMPING * Math.sqrt(rightingNm * inertia.roll),
     },
