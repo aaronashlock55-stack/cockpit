@@ -9,6 +9,7 @@ import {
 } from '@/libs/practice-3d-fx'
 import { buildRoverModel } from '@/libs/practice-3d-rover'
 import { buildShaderCaustics, buildShaderWater } from '@/libs/practice-3d-shaders'
+import { smoothTowards } from '@/libs/practice-interp'
 import { tetherWorldPath } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
 import { type RoverProfile, defaultRoverProfile } from '@/types/rover-profile'
@@ -37,18 +38,34 @@ export interface CameraAdjust {
   zoom: number
 }
 
+/** Body-frame acceleration, m/s², for camera weight cues. */
+export interface BodyAccel {
+  /** Forward acceleration. */
+  surge: number
+  /** Rightward acceleration. */
+  sway: number
+  /** Downward acceleration. */
+  heave: number
+}
+
 /** Per-frame update options. */
 export interface WorldUpdateOptions {
   /** Claw closure 0..1. */
   gripper?: number
   /** Camera mode: first-person ROV camera or third-person chase view. */
   cameraMode?: 'fp' | 'chase'
-  /** Vehicle speed (m/s) — drives propeller spin. */
+  /** Vehicle speed (m/s) — drives propeller spin, FOV and chase distance cues. */
   speed?: number
   /** Full tether path (attach → hole → snag points → rover) as [x, y, depth] triples. */
   tetherPath?: [number, number, number][]
   /** Operator camera look/zoom adjustment. */
   cameraAdjust?: CameraAdjust
+  /** Body-frame acceleration for first-person micro-inertia cues. */
+  accel?: BodyAccel
+  /** Spooled per-thruster outputs [-1, 1], for prop-wash visuals. */
+  thrusterOutputs?: number[]
+  /** Frame dt override in seconds (tests; defaults to the internal clock). */
+  dt?: number
 }
 
 /** Handle to the built world, used by the widget each frame. */
@@ -270,16 +287,27 @@ export const buildPracticeWorld = (
   const FP_MOUNT = new THREE.Vector3(0, mountH * 0.34, -mountL * 0.46)
   const FP_TILT = -0.14 // look slightly down so the claw stays in frame
 
+  // FP micro-inertia (flight-sim "head inertia"): acceleration tips the view a
+  // touch and tucks the camera back on its mount — the cue that sells mass.
+  let fpPitchOff = 0
+  let fpLagOff = 0
+  let fpRollOff = 0
+
   // Adjustable camera: the operator can look around (yaw/pitch offset) and zoom
   // on top of the rigid mount / chase rig.
   const mountCameraFp = (adjust?: CameraAdjust): void => {
     if (camera.parent !== rover.group) rover.group.add(camera)
     camera.position.copy(FP_MOUNT)
-    camera.rotation.set(FP_TILT + (adjust?.pitch ?? 0), adjust?.yaw ?? 0, 0)
+    camera.position.z += fpLagOff
+    camera.rotation.set(FP_TILT + (adjust?.pitch ?? 0) + fpPitchOff, adjust?.yaw ?? 0, fpRollOff)
   }
+  // Speed widens the FOV subtly (sense of speed), smoothed so it eases in/out.
+  let smoothSpeed = 0
+  const FOV_SPEED_GAIN = 6 // extra degrees at >= 1.2 m/s
   let lastFov = camera.fov
   const applyZoom = (zoom: number): void => {
-    const fov = Math.min(110, Math.max(30, 80 / Math.max(0.4, zoom)))
+    const base = 80 + FOV_SPEED_GAIN * Math.min(smoothSpeed, 1.2)
+    const fov = Math.min(110, Math.max(30, base / Math.max(0.4, zoom)))
     if (Math.abs(fov - lastFov) > 0.01) {
       camera.fov = fov
       camera.updateProjectionMatrix()
@@ -291,11 +319,15 @@ export const buildPracticeWorld = (
   const clock = new THREE.Clock()
   let elapsed = 0
   const chasePos = new THREE.Vector3()
+  const lookPos = new THREE.Vector3()
   let chaseInit = false
   const roverL = Math.max(profile.dimensions.length, 0.3)
+  /** Chase rig stiffness, 1/s (frame-rate independent via exp smoothing). */
+  const CHASE_SMOOTH_K = 6
+  const LOOK_SMOOTH_K = 10
 
   const update = (pose: CameraPose, opts: WorldUpdateOptions = {}): void => {
-    const delta = Math.min(clock.getDelta(), 0.1)
+    const delta = opts.dt ?? Math.min(clock.getDelta(), 0.1)
     elapsed += delta
     caustics.update(elapsed)
     water?.update(elapsed)
@@ -304,6 +336,14 @@ export const buildPracticeWorld = (
     lightShafts.update(elapsed)
     syncObstacles()
     const adjust = opts.cameraAdjust
+    smoothSpeed = smoothTowards(smoothSpeed, opts.speed ?? 0, 4, delta)
+    // Micro-inertia springs: forward acceleration dips the view (~1°) and tucks
+    // the camera back (~2 cm); sway acceleration banks it a hair.
+    const accel = opts.accel
+    const clampAbs = (v: number, abs: number): number => Math.min(abs, Math.max(-abs, v))
+    fpPitchOff = smoothTowards(fpPitchOff, clampAbs(-(accel?.surge ?? 0) * 0.012, 0.025), 8, delta)
+    fpLagOff = smoothTowards(fpLagOff, clampAbs((accel?.surge ?? 0) * 0.01, 0.02), 8, delta)
+    fpRollOff = smoothTowards(fpRollOff, clampAbs((accel?.sway ?? 0) * 0.008, 0.015), 8, delta)
     applyZoom(adjust?.zoom ?? 1)
 
     // Rover model pose (same rotation convention as the camera).
@@ -319,9 +359,12 @@ export const buildPracticeWorld = (
     rover.group.visible = true
     const chase = opts.cameraMode === 'chase'
     if (chase) {
-      // Third-person orbit: trail behind/above the rover; drag orbits, wheel zooms.
+      // Third-person orbit: trail behind/above the rover; drag orbits, wheel
+      // zooms. Springs use exp smoothing so the rig's stiffness is identical
+      // at any frame rate, and speed pulls the camera back slightly.
       if (camera.parent !== scene) scene.add(camera)
-      const dist = Math.max(1.6, roverL * 3.2) / Math.max(0.4, adjust?.zoom ?? 1)
+      const speedPull = 1 + 0.12 * Math.min(smoothSpeed, 1.2)
+      const dist = (Math.max(1.6, roverL * 3.2) * speedPull) / Math.max(0.4, adjust?.zoom ?? 1)
       const az = pose.heading + Math.PI + (adjust?.yaw ?? 0) // behind the rover by default
       const el = Math.min(1.2, Math.max(-0.25, 0.42 + (adjust?.pitch ?? 0)))
       const horiz = Math.cos(el) * dist
@@ -332,14 +375,17 @@ export const buildPracticeWorld = (
       )
       desired.x = Math.min(L - 0.3, Math.max(0.3, desired.x))
       desired.z = Math.min(W - 0.3, Math.max(0.3, desired.z))
+      const lookTarget = new THREE.Vector3(pose.x, -pose.depth, pose.y)
       if (!chaseInit) {
         chasePos.copy(desired)
+        lookPos.copy(lookTarget)
         chaseInit = true
       } else {
-        chasePos.lerp(desired, 0.1)
+        chasePos.lerp(desired, 1 - Math.exp(-CHASE_SMOOTH_K * delta))
+        lookPos.lerp(lookTarget, 1 - Math.exp(-LOOK_SMOOTH_K * delta))
       }
       camera.position.copy(chasePos)
-      camera.lookAt(pose.x, -pose.depth, pose.y)
+      camera.lookAt(lookPos)
     } else {
       // First-person: the camera rides on the rover as a rigid body, so it
       // inherits the vehicle's heading/pitch/roll automatically. The look

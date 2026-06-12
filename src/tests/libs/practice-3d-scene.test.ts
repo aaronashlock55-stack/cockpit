@@ -104,6 +104,44 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
+  it('FOV widens subtly with speed (sense of speed)', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const pose = { x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 }
+    world.update(pose, { cameraMode: 'fp', speed: 0, dt: 0.5 })
+    const baseFov = world.camera.fov
+    for (let i = 0; i < 10; i++) world.update(pose, { cameraMode: 'fp', speed: 1.2, dt: 0.5 })
+    expect(world.camera.fov).toBeGreaterThan(baseFov + 3)
+    expect(world.camera.fov).toBeLessThan(baseFov + 8)
+    world.dispose()
+  })
+
+  it('chase camera smoothing is frame-rate independent (same dt total, same place)', () => {
+    const start = { x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 }
+    const moved = { ...start, x: 12 }
+    const cam = (steps: number, dt: number): number => {
+      const world = buildPracticeWorld(openWaterEnvironment)
+      world.update(start, { cameraMode: 'chase', dt: 0.01 }) // init the rig
+      for (let i = 0; i < steps; i++) world.update(moved, { cameraMode: 'chase', dt })
+      const x = world.camera.position.x
+      world.dispose()
+      return x
+    }
+    expect(cam(1, 0.2)).toBeCloseTo(cam(4, 0.05), 3)
+  })
+
+  it('forward acceleration dips the first-person view (micro-inertia weight cue)', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const pose = { x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 }
+    world.update(pose, { cameraMode: 'fp', dt: 0.5 })
+    const level = world.camera.getWorldDirection(new THREE.Vector3())
+    for (let i = 0; i < 10; i++) {
+      world.update(pose, { cameraMode: 'fp', dt: 0.5, accel: { surge: 3, sway: 0, heave: 0 } })
+    }
+    const dipped = world.camera.getWorldDirection(new THREE.Vector3())
+    expect(dipped.y).toBeLessThan(level.y - 0.01) // tipped down vs baseline
+    world.dispose()
+  })
+
   it('builds light shafts and bubbles for ambience', () => {
     const world = buildPracticeWorld(openWaterEnvironment)
     const names = world.scene.children.map((c) => c.name)

@@ -159,6 +159,10 @@ const resize = (): void => {
   world.camera.updateProjectionMatrix()
 }
 
+// Body acceleration derived from successive sim frames (for camera weight cues).
+let lastFrameT = 0
+const accel = { surge: 0, sway: 0, heave: 0 }
+
 const renderLoop = (): void => {
   animationFrame = requestAnimationFrame(renderLoop)
   if (!renderer || !world) return
@@ -168,6 +172,13 @@ const renderLoop = (): void => {
   // Glassy motion at any refresh rate: blend the sim's prev/curr snapshots by
   // wall-clock alpha instead of snapping to the latest tick.
   const pose = interpolatePose(frames.prev, frames.curr, frameAlpha(frames.prev.t, frames.curr.t, performance.now()))
+  if (frames.curr.t !== lastFrameT) {
+    const fdt = Math.max((frames.curr.t - frames.prev.t) / 1000, 1e-3)
+    accel.surge = (frames.curr.surgeVel - frames.prev.surgeVel) / fdt
+    accel.sway = (frames.curr.swayVel - frames.prev.swayVel) / fdt
+    accel.heave = (frames.curr.heaveVel - frames.prev.heaveVel) / fdt
+    lastFrameT = frames.curr.t
+  }
   world.update(
     { x: pose.x, y: pose.y, depth: pose.depth, heading: pose.heading, pitch: pose.pitch, roll: pose.roll },
     {
@@ -176,6 +187,8 @@ const renderLoop = (): void => {
       speed: pose.speed,
       tetherPath: r.tetherPath,
       cameraAdjust: cameraAdjust.value,
+      accel,
+      thrusterOutputs: r.thrusterOutputs,
     }
   )
   renderer.render(world.scene, world.camera)
