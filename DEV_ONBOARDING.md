@@ -102,6 +102,7 @@ Just read the PRs in the GitHub UI — the diffs and descriptions cover everythi
 |---|---|
 | "I don't see any of the new features" | You're on `master`. Run the `git checkout <feature-branch>` step. |
 | Build/import errors about missing modules (MAVLink2Rest, ParameterRepository…) | You skipped `git submodule update --init --recursive`. |
+| `Failed to resolve import "./components/vue-tour/dist/vue-tour.css"` (or similar missing submodule file) | A submodule didn't fully initialize. From the **repo root** run `git submodule update --init --recursive --force`, confirm `ls core/frontend/src/components/vue-tour/dist/vue-tour.css` exists, then restart `yarn dev`. |
 | `npm install` errors / weird dependency state | Use **yarn**, not npm. |
 | Controller image stays generic | The pad model isn't in the VID:PID map yet — see the controller guide's "add a new controller" section. |
 | Video tiles show only spinners | Expected without a vehicle/RTSP source; the layouts still work. |
