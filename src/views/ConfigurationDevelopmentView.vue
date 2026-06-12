@@ -34,6 +34,57 @@
               hide-details
               class="min-w-[155px]"
             />
+            <v-switch
+              v-model="devStore.enableDemoMode"
+              label="Practice / Demo mode (no vehicle)"
+              color="white"
+              hide-details
+              class="min-w-[155px]"
+            />
+          </div>
+          <div v-if="devStore.enableDemoMode" class="flex flex-col w-full mt-2 px-1 gap-y-2">
+            <span class="text-xs text-gray-300">
+              Rover profile used by the practice simulator — pick a preset, upload your own, or import from a connected
+              vehicle. The sim then handles like that rover.
+            </span>
+            <div class="flex flex-row flex-wrap items-center gap-2">
+              <v-select
+                v-model="selectedProfileName"
+                :items="profileNames"
+                label="Rover profile"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="min-w-[220px] max-w-[300px]"
+                @update:model-value="selectBuiltInProfile"
+              />
+              <v-btn variant="outlined" color="white" size="small" prepend-icon="mdi-tray-arrow-up">
+                Upload
+                <input type="file" accept="application/json" class="hidden-file-input" @change="onUploadProfile" />
+              </v-btn>
+              <v-btn
+                variant="outlined"
+                color="white"
+                size="small"
+                prepend-icon="mdi-tray-arrow-down"
+                @click="onDownloadProfile"
+              >
+                Download
+              </v-btn>
+              <v-btn
+                variant="outlined"
+                color="white"
+                size="small"
+                prepend-icon="mdi-import"
+                @click="onImportFromVehicle"
+              >
+                Import from vehicle
+              </v-btn>
+            </div>
+            <span class="text-xs text-gray-400"
+              >Active: {{ activeRoverProfile.name }} ({{ activeRoverProfile.thrusters.length }} thrusters)</span
+            >
           </div>
         </div>
         <ExpansiblePanel :is-expanded="!interfaceStore.isOnPhoneScreen" no-bottom-divider>
@@ -101,9 +152,12 @@
 import { parse } from 'date-fns'
 import { saveAs } from 'file-saver'
 import { onBeforeMount, onBeforeUnmount } from 'vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import ExpansiblePanel from '@/components/ExpansiblePanel.vue'
+import { useSnackbar } from '@/composables/snackbar'
+import { activeRoverProfile } from '@/libs/actions/demo-mode-state'
+import { downloadRoverProfile, importRoverProfileFromVehicle, readRoverProfileFile } from '@/libs/rover-profile-io'
 import {
   type SystemLog,
   cockpitSytemLogsDB,
@@ -115,10 +169,58 @@ import { formatBytes, isElectron } from '@/libs/utils'
 import { reloadCockpitAndWarnUser } from '@/libs/utils-vue'
 import { useAppInterfaceStore } from '@/stores/appInterface'
 import { useDevelopmentStore } from '@/stores/development'
+import { useMainVehicleStore } from '@/stores/mainVehicle'
+import { builtInRoverProfiles } from '@/types/rover-profile'
 
 import BaseConfigurationView from './BaseConfigurationView.vue'
 const devStore = useDevelopmentStore()
 const interfaceStore = useAppInterfaceStore()
+const vehicleStore = useMainVehicleStore()
+const { openSnackbar } = useSnackbar()
+
+const selectedProfileName = ref(activeRoverProfile.value.name)
+const profileNames = computed(() => {
+  const names = builtInRoverProfiles.map((p) => p.name)
+  if (!names.includes(activeRoverProfile.value.name)) names.unshift(activeRoverProfile.value.name)
+  return names
+})
+
+const selectBuiltInProfile = (name: string): void => {
+  const profile = builtInRoverProfiles.find((p) => p.name === name)
+  if (profile) activeRoverProfile.value = profile
+}
+
+const onUploadProfile = async (event: Event): Promise<void> => {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  try {
+    const profile = await readRoverProfileFile(file)
+    activeRoverProfile.value = profile
+    selectedProfileName.value = profile.name
+    openSnackbar({ variant: 'success', message: `Loaded rover profile "${profile.name}".`, duration: 3000 })
+  } catch (error) {
+    openSnackbar({ variant: 'error', message: `${error instanceof Error ? error.message : error}`, duration: 5000 })
+  }
+}
+
+const onDownloadProfile = (): void => {
+  downloadRoverProfile(activeRoverProfile.value)
+}
+
+const onImportFromVehicle = (): void => {
+  if (!vehicleStore.isVehicleOnline) {
+    openSnackbar({ variant: 'warning', message: 'No vehicle connected to import from.', duration: 4000 })
+    return
+  }
+  const profile = importRoverProfileFromVehicle(vehicleStore.icon ?? undefined)
+  activeRoverProfile.value = profile
+  selectedProfileName.value = profile.name
+  openSnackbar({
+    variant: 'success',
+    message: `Imported "${profile.name}" from the connected vehicle.`,
+    duration: 3000,
+  })
+}
 
 /* eslint-disable jsdoc/require-jsdoc */
 interface SystemLogsData {
@@ -346,6 +448,13 @@ const deleteOldLogsFromDB = async (): Promise<void> => {
 .custom-header {
   background-color: #333 !important;
   color: #fff;
+}
+
+.hidden-file-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .current-session-indicator {

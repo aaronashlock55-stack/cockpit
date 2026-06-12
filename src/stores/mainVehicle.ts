@@ -9,6 +9,7 @@ import { useBlueOsStorage } from '@/composables/settingsSyncer'
 import { useSnackbar } from '@/composables/snackbar'
 import { getAllDataLakeVariablesInfo, getDataLakeVariableInfo, setDataLakeVariableData } from '@/libs/actions/data-lake'
 import { createDataLakeVariable } from '@/libs/actions/data-lake'
+import { isDemoModeActive } from '@/libs/actions/demo-mode-state'
 import { altitude_setpoint } from '@/libs/altitude-slider'
 import {
   getCpusInfo,
@@ -581,6 +582,11 @@ export const useMainVehicleStore = defineStore('main-vehicle', () => {
    * @param {string} modeName
    */
   async function setFlightMode(modeName: string): Promise<void> {
+    // In Practice/Demo mode there is no real vehicle; just reflect the chosen mode.
+    if (isDemoModeActive.value) {
+      mode.value = modeName
+      return
+    }
     const enumMode = modes.value?.get(modeName)
     if (enumMode !== undefined) {
       await mainVehicle.value?.setMode(enumMode)
