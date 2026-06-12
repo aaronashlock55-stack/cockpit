@@ -1,6 +1,6 @@
 import { axisKeys, backMix, bodyToWorld, footprintRadius, hydroModel, worldToBody } from '@/libs/rover-hydro'
 import { type TetherWrap, applyTetherPhysics, tetherDeployedLength } from '@/libs/rover-tether'
-import { type PracticeEnvironment, waterDensity } from '@/types/practice-environment'
+import { type PracticeEnvironment, flowVelocity, waterDensity } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile } from '@/types/rover-profile'
 
 export { tetherDeployedLength } from '@/libs/rover-tether'
@@ -63,6 +63,8 @@ export interface SimState {
   justPassed?: string
   /** Points where the tether is currently snagged/bending around obstacles. */
   tetherWraps: TetherWrap[]
+  /** Accumulated sim time, seconds (drives time-varying water motion like waves). */
+  time: number
   /** Claw closure, 0 = open .. 1 = closed (animated toward the commanded state). */
   gripper: number
   /** Id of the obstacle currently held by the claw, if any. */
@@ -102,6 +104,7 @@ export const initialSimState = (env: PracticeEnvironment): SimState => ({
   thrust: zeroAxes(),
   ringSides: {},
   tetherWraps: [],
+  time: 0,
   gripper: 0,
 })
 
@@ -183,6 +186,7 @@ export const stepSimulation = (
     justPassed: undefined,
     collidedWith: undefined,
   }
+  next.time = (state.time ?? 0) + dt
 
   // Thruster outputs: forward-mix the demand, then spool toward the target.
   const targets = profile.thrusters.map((t) =>
@@ -229,14 +233,26 @@ export const stepSimulation = (
   // pitched vehicle feels it partly along surge — like the real thing.
   const [bSurge, bSway, bHeave] = worldToBody(0, 0, model.buoyancyDownN, state.roll, state.pitch, state.heading)
 
-  // Translational dynamics: M ν̇ = τ − D(ν) ν + g(η).
-  const accel = (axis: 'surge' | 'sway' | 'heave', vel: number, thrustN: number, hydroN: number): number => {
-    const drag = (model.dragQuad[axis] * Math.abs(vel) * vel + model.dragLin[axis] * vel) * tetherDragMult
+  // Water motion (current / wave pool / jet stream): drag acts on velocity
+  // RELATIVE to the water, so a current pushes the rover until it drifts along.
+  const [flowX, flowY, flowZ] = flowVelocity(env.flow, state.x, state.y, state.depth, state.time ?? 0)
+  const [waterU, waterV, waterW] = worldToBody(flowX, flowY, flowZ, state.roll, state.pitch, state.heading)
+
+  // Translational dynamics: M ν̇ = τ − D(ν−ν_water) + g(η).
+  const accel = (
+    axis: 'surge' | 'sway' | 'heave',
+    vel: number,
+    waterVel: number,
+    thrustN: number,
+    hydroN: number
+  ): number => {
+    const rel = vel - waterVel
+    const drag = (model.dragQuad[axis] * Math.abs(rel) * rel + model.dragLin[axis] * rel) * tetherDragMult
     return (thrustN + hydroN - drag) / (model.massKg + model.addedMass[axis])
   }
-  next.surgeVel = state.surgeVel + accel('surge', state.surgeVel, fSurge, bSurge) * dt
-  next.swayVel = state.swayVel + accel('sway', state.swayVel, fSway, bSway) * dt
-  next.heaveVel = state.heaveVel + accel('heave', state.heaveVel, fHeave, bHeave) * dt
+  next.surgeVel = state.surgeVel + accel('surge', state.surgeVel, waterU, fSurge, bSurge) * dt
+  next.swayVel = state.swayVel + accel('sway', state.swayVel, waterV, fSway, bSway) * dt
+  next.heaveVel = state.heaveVel + accel('heave', state.heaveVel, waterW, fHeave, bHeave) * dt
 
   // Rotational dynamics. Pitch/roll feel the hydrostatic righting moment.
   const rotAccel = (axis: 'yaw' | 'pitch' | 'roll', rate: number, torque: number, righting: number): number => {

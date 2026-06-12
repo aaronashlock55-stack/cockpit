@@ -90,6 +90,28 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
+  it('camera zoom narrows the FOV and look-offset turns the view', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const pose = { x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 }
+    world.update(pose, { cameraMode: 'fp', cameraAdjust: { yaw: 0, pitch: 0, zoom: 1 } })
+    const baseFov = world.camera.fov
+    const baseDir = world.camera.getWorldDirection(new THREE.Vector3())
+    world.update(pose, { cameraMode: 'fp', cameraAdjust: { yaw: 0, pitch: 0, zoom: 2 } })
+    expect(world.camera.fov).toBeLessThan(baseFov) // zoomed in
+    world.update(pose, { cameraMode: 'fp', cameraAdjust: { yaw: 0.6, pitch: 0, zoom: 1 } })
+    const turned = world.camera.getWorldDirection(new THREE.Vector3())
+    expect(turned.angleTo(baseDir)).toBeGreaterThan(0.3) // looked to the side
+    world.dispose()
+  })
+
+  it('builds light shafts and bubbles for ambience', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const names = world.scene.children.map((c) => c.name)
+    expect(names).toContain('light-shafts')
+    expect(names).toContain('bubbles')
+    world.dispose()
+  })
+
   it('builds the animated water surface and floor caustics', () => {
     const world = buildPracticeWorld(openWaterEnvironment)
     const names = world.scene.children.map((c) => c.name)

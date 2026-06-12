@@ -133,12 +133,14 @@ export const buildCaustics = (L: number, W: number, D: number): AnimatedEffect =
 
 /**
  * Animated water surface seen from below: a segmented plane with two crossing
- * sine waves displacing it each frame.
+ * sine waves displacing it each frame. Amplitude scales with `ampScale` so a
+ * wave-pool environment visibly chops.
  * @param {number} L Pool length, m.
  * @param {number} W Pool width, m.
+ * @param {number} ampScale Wave amplitude multiplier (1 = calm pool).
  * @returns {AnimatedEffect} Mesh + animator.
  */
-export const buildAnimatedWater = (L: number, W: number): AnimatedEffect => {
+export const buildAnimatedWater = (L: number, W: number, ampScale = 1): AnimatedEffect => {
   const sx = Math.min(80, Math.max(16, Math.round(L * 1.5)))
   const sy = Math.min(80, Math.max(16, Math.round(W * 1.5)))
   const geometry = new THREE.PlaneGeometry(L, W, sx, sy)
@@ -155,11 +157,13 @@ export const buildAnimatedWater = (L: number, W: number): AnimatedEffect => {
   mesh.name = 'water-surface'
   mesh.position.set(L / 2, 0, W / 2)
   const position = geometry.getAttribute('position') as THREE.BufferAttribute
+  const a1 = 0.045 * ampScale
+  const a2 = 0.035 * ampScale
   const update = (t: number): void => {
     for (let i = 0; i < position.count; i++) {
       const x = position.getX(i)
       const z = position.getZ(i)
-      position.setY(i, 0.045 * Math.sin(0.7 * x + 1.3 * t) + 0.035 * Math.sin(0.9 * z + 0.9 * t + 0.4 * x))
+      position.setY(i, a1 * Math.sin(0.7 * x + 1.3 * t) + a2 * Math.sin(0.9 * z + 0.9 * t + 0.4 * x))
     }
     position.needsUpdate = true
     geometry.computeVertexNormals()
@@ -168,13 +172,20 @@ export const buildAnimatedWater = (L: number, W: number): AnimatedEffect => {
 }
 
 /**
- * Suspended particulate that drifts gently, for motion/depth perception.
+ * Suspended particulate that drifts gently and streams along any water current,
+ * for motion/depth perception and to make a flow's direction visible.
  * @param {number} L Pool length, m.
  * @param {number} W Pool width, m.
  * @param {number} D Pool depth, m.
+ * @param {[number, number]} drift Representative current [vx, vy] in m/s.
  * @returns {AnimatedEffect} Points + animator.
  */
-export const buildDriftingParticles = (L: number, W: number, D: number): AnimatedEffect => {
+export const buildDriftingParticles = (
+  L: number,
+  W: number,
+  D: number,
+  drift: [number, number] = [0, 0]
+): AnimatedEffect => {
   const count = 500
   const base = new Float32Array(count * 3)
   for (let i = 0; i < count; i++) {
@@ -191,12 +202,111 @@ export const buildDriftingParticles = (L: number, W: number, D: number): Animate
   )
   points.name = 'particles'
   const attr = geometry.getAttribute('position') as THREE.BufferAttribute
+  const wrap = (v: number, max: number): number => ((v % max) + max) % max
   const update = (t: number): void => {
     for (let i = 0; i < count; i++) {
-      attr.setX(i, base[i * 3] + 0.12 * Math.sin(0.25 * t + i))
+      attr.setX(i, wrap(base[i * 3] + drift[0] * t + 0.12 * Math.sin(0.25 * t + i), L))
       attr.setY(i, base[i * 3 + 1] + 0.05 * Math.sin(0.4 * t + i * 1.7))
+      attr.setZ(i, wrap(base[i * 3 + 2] + drift[1] * t, W))
     }
     attr.needsUpdate = true
   }
   return { object: points, update }
+}
+
+/**
+ * Volumetric-looking light shafts (god rays) slanting down from the surface.
+ * @param {number} L Pool length, m.
+ * @param {number} W Pool width, m.
+ * @param {number} D Pool depth, m.
+ * @returns {AnimatedEffect} Group + animator.
+ */
+export const buildLightShafts = (L: number, W: number, D: number): AnimatedEffect => {
+  const group = new THREE.Group()
+  group.name = 'light-shafts'
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xdff1ff,
+    transparent: true,
+    opacity: 0.05,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  const shafts: THREE.Mesh[] = []
+  const count = Math.max(4, Math.round(L / 6))
+  for (let i = 0; i < count; i++) {
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.5 + Math.random() * 0.8, D * 1.4), material.clone())
+    plane.position.set(Math.random() * L, -D / 2, Math.random() * W)
+    plane.rotation.set(0, Math.random() * Math.PI, 0.25 + Math.random() * 0.15)
+    group.add(plane)
+    shafts.push(plane)
+  }
+  const update = (t: number): void => {
+    shafts.forEach((s, i) => {
+      const m = s.material as THREE.MeshBasicMaterial
+      m.opacity = 0.04 + 0.03 * (0.5 + 0.5 * Math.sin(t * 0.3 + i))
+    })
+  }
+  return { object: group, update }
+}
+
+/**
+ * Rising bubbles for ambience.
+ * @param {number} L Pool length, m.
+ * @param {number} W Pool width, m.
+ * @param {number} D Pool depth, m.
+ * @returns {AnimatedEffect} Points + animator.
+ */
+export const buildBubbles = (L: number, W: number, D: number): AnimatedEffect => {
+  const count = 120
+  const base = new Float32Array(count * 3)
+  const speed = new Float32Array(count)
+  for (let i = 0; i < count; i++) {
+    base[i * 3] = Math.random() * L
+    base[i * 3 + 1] = -Math.random() * D
+    base[i * 3 + 2] = Math.random() * W
+    speed[i] = 0.15 + Math.random() * 0.25
+  }
+  const positions = new Float32Array(base)
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  const bubbles = new THREE.Points(
+    geometry,
+    new THREE.PointsMaterial({ color: 0xeaf7ff, size: 0.035, transparent: true, opacity: 0.4 })
+  )
+  bubbles.name = 'bubbles'
+  const attr = geometry.getAttribute('position') as THREE.BufferAttribute
+  const update = (t: number): void => {
+    for (let i = 0; i < count; i++) {
+      const y = -D + ((base[i * 3 + 1] + D + speed[i] * t) % D)
+      attr.setX(i, base[i * 3] + 0.04 * Math.sin(t + i))
+      attr.setY(i, y)
+    }
+    attr.needsUpdate = true
+  }
+  return { object: bubbles, update }
+}
+
+/**
+ * A vertical gradient equirectangular texture (bright surface → dark deep) used
+ * as the scene environment map, so clear/metal materials pick up subtle
+ * underwater reflections (cheap image-based lighting, no renderer needed).
+ * @returns {THREE.Texture | null} The environment texture, or null in tests.
+ */
+export const gradientEnvironment = (): THREE.Texture | null => {
+  if (typeof document === 'undefined') return null
+  const canvas = document.createElement('canvas')
+  canvas.width = 16
+  canvas.height = 128
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  const gradient = ctx.createLinearGradient(0, 0, 0, 128)
+  gradient.addColorStop(0, '#bfe6ff')
+  gradient.addColorStop(0.45, '#2f6c8c')
+  gradient.addColorStop(1, '#06141d')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, 16, 128)
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.mapping = THREE.EquirectangularReflectionMapping
+  return texture
 }

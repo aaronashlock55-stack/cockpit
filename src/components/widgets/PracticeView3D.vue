@@ -5,11 +5,24 @@
       <span class="text-sm opacity-70">Enable Practice / Demo mode in Settings → Development.</span>
     </div>
     <template v-else>
-      <canvas ref="canvas" class="render-canvas" />
+      <canvas
+        ref="canvas"
+        class="render-canvas"
+        :class="{ grabbing: dragging }"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointerleave="onPointerUp"
+        @wheel.prevent="onWheel"
+        @dblclick="resetCamera"
+      />
       <VideoHudOverlay v-if="widget.options.showHud && cameraMode === 'fp'" />
       <div class="view-controls">
         <button class="view-button" @click="toggleCamera">
           {{ cameraMode === 'fp' ? '🎥 Chase cam' : '🤿 ROV cam' }}
+        </button>
+        <button v-if="cameraAdjusted" class="view-button" title="Recenter camera" @click="resetCamera">
+          ⟳ Recenter
         </button>
       </div>
       <div class="bottom-hints">
@@ -20,7 +33,7 @@
         <span v-if="env.tether.enabled" class="keys" :class="{ taut: tetherTaut }">
           tether {{ readout.tetherDeployed.toFixed(1) }}/{{ env.tether.length }} m
         </span>
-        <span class="keys">W A S D move · ← → turn · ↑ ↓ depth · G claw · C camera</span>
+        <span class="keys">W A S D move · ← → turn · ↑ ↓ depth · G claw · C camera · drag look · scroll zoom</span>
       </div>
     </template>
   </div>
@@ -60,6 +73,38 @@ const onViewKey = (event: KeyboardEvent): void => {
   if (!event.repeat && event.key.toLowerCase() === 'c' && practiceSimReadout.value) toggleCamera()
 }
 
+// Adjustable camera: drag to look around, wheel to zoom, double-click/⟳ to reset.
+const cameraAdjust = ref({ yaw: 0, pitch: 0, zoom: 1 })
+const dragging = ref(false)
+let lastPointer = { x: 0, y: 0 }
+const cameraAdjusted = computed(
+  () => cameraAdjust.value.yaw !== 0 || cameraAdjust.value.pitch !== 0 || cameraAdjust.value.zoom !== 1
+)
+const clampN = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
+
+const onPointerDown = (event: PointerEvent): void => {
+  dragging.value = true
+  lastPointer = { x: event.clientX, y: event.clientY }
+  ;(event.target as HTMLElement).setPointerCapture?.(event.pointerId)
+}
+const onPointerMove = (event: PointerEvent): void => {
+  if (!dragging.value) return
+  const dx = event.clientX - lastPointer.x
+  const dy = event.clientY - lastPointer.y
+  lastPointer = { x: event.clientX, y: event.clientY }
+  cameraAdjust.value.yaw = clampN(cameraAdjust.value.yaw - dx * 0.005, -Math.PI, Math.PI)
+  cameraAdjust.value.pitch = clampN(cameraAdjust.value.pitch - dy * 0.005, -1, 1)
+}
+const onPointerUp = (): void => {
+  dragging.value = false
+}
+const onWheel = (event: WheelEvent): void => {
+  cameraAdjust.value.zoom = clampN(cameraAdjust.value.zoom * (event.deltaY < 0 ? 1.1 : 0.9), 0.5, 4)
+}
+const resetCamera = (): void => {
+  cameraAdjust.value = { yaw: 0, pitch: 0, zoom: 1 }
+}
+
 const heldName = computed(() => {
   const id = practiceSimReadout.value?.heldObstacleId
   if (!id) return undefined
@@ -82,6 +127,7 @@ const structuralSig = computed(() => {
     e.pool,
     e.iceSheet,
     e.tether.attachPoint,
+    e.flow,
     e.obstacles.map((o) => [o.id, o.shape, o.size, o.yawDeg, o.color]),
   ])
 })
@@ -126,6 +172,7 @@ const renderLoop = (): void => {
       cameraMode: cameraMode.value,
       speed: Number.isFinite(speed) ? speed : 0,
       tetherPath: r.tetherPath,
+      cameraAdjust: cameraAdjust.value,
     }
   )
   renderer.render(world.scene, world.camera)
@@ -191,6 +238,11 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   display: block;
+  cursor: grab;
+  touch-action: none;
+}
+.render-canvas.grabbing {
+  cursor: grabbing;
 }
 .empty-state {
   width: 100%;

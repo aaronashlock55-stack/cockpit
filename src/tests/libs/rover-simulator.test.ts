@@ -271,6 +271,44 @@ describe('tether', () => {
   })
 })
 
+describe('water motion (current / wave pool / jet stream)', () => {
+  it('a steady current pushes a passive rover downstream', () => {
+    const env = makeEnv({ flow: { type: 'current', directionDeg: 0, speed: 0.6 } })
+    const start = { ...initialSimState(env), x: 8, y: 5, depth: 1, heading: 0 }
+    const state = run(env, zeroDemand, 100, { ...start })
+    expect(state.x).toBeGreaterThan(start.x + 0.4) // carried +x
+    expect(state.surgeVel).toBeGreaterThan(0.2) // drifting with the flow
+  })
+
+  it('a jet stream only pushes a rover inside its band', () => {
+    const env = makeEnv({
+      flow: { type: 'jet', directionDeg: 90, speed: 1.0, jetCenter: 5, jetWidth: 4 },
+    })
+    const inBand = run(env, zeroDemand, 40, { ...initialSimState(env), x: 8, y: 5, depth: 1, heading: 0 })
+    const outBand = run(env, zeroDemand, 40, { ...initialSimState(env), x: 8, y: 9, depth: 1, heading: 0 })
+    expect(inBand.y - 5).toBeGreaterThan(0.4) // swept along the jet (+y)
+    expect(Math.abs(outBand.y - 9)).toBeLessThan(0.15) // outside the band, barely moves
+  })
+
+  it('a wave pool agitates the rover near the surface more than deep down', () => {
+    const env = makeEnv({
+      pool: { length: 20, width: 10, depth: 6 },
+      flow: { type: 'waves', directionDeg: 0, speed: 0.8 },
+    })
+    const maxSpeed = (depth: number): number => {
+      let state = { ...initialSimState(env), x: 10, y: 5, depth, heading: 0 }
+      let peak = 0
+      for (let i = 0; i < 80; i++) {
+        state = stepSimulation(state, blueRov2HeavyProfile, env, zeroDemand, 0.04)
+        peak = Math.max(peak, Math.abs(state.surgeVel))
+      }
+      return peak
+    }
+    expect(maxSpeed(0.3)).toBeGreaterThan(0.05) // surface chop moves the rover
+    expect(maxSpeed(0.3)).toBeGreaterThan(maxSpeed(5) * 2) // far calmer deep down
+  })
+})
+
 describe('inertia and momentum (Fossen-style feel)', () => {
   it('accelerates gradually from rest (added mass + thruster spool)', () => {
     const env = makeEnv({ pool: { length: 60, width: 10, depth: 3 } })

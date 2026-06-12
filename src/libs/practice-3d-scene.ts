@@ -1,6 +1,14 @@
 import * as THREE from 'three'
 
-import { buildAnimatedWater, buildCaustics, buildDriftingParticles, tiledMaterial } from '@/libs/practice-3d-fx'
+import {
+  buildAnimatedWater,
+  buildBubbles,
+  buildCaustics,
+  buildDriftingParticles,
+  buildLightShafts,
+  gradientEnvironment,
+  tiledMaterial,
+} from '@/libs/practice-3d-fx'
 import { buildRoverModel } from '@/libs/practice-3d-rover'
 import { tetherWorldPath } from '@/libs/rover-simulator'
 import { type PracticeEnvironment } from '@/types/practice-environment'
@@ -20,6 +28,16 @@ import { type RoverProfile, defaultRoverProfile } from '@/types/rover-profile'
  *   pool depth (down)      -> three -Y   (water surface at Y=0)
  */
 
+/** Operator camera look/zoom offset on top of the rigid mount or chase rig. */
+export interface CameraAdjust {
+  /** Yaw look offset, radians. */
+  yaw: number
+  /** Pitch look offset, radians. */
+  pitch: number
+  /** Zoom factor (1 = default; >1 zooms in / narrows FOV / pulls the chase in). */
+  zoom: number
+}
+
 /** Per-frame update options. */
 export interface WorldUpdateOptions {
   /** Claw closure 0..1. */
@@ -30,6 +48,8 @@ export interface WorldUpdateOptions {
   speed?: number
   /** Full tether path (attach → hole → snag points → rover) as [x, y, depth] triples. */
   tetherPath?: [number, number, number][]
+  /** Operator camera look/zoom adjustment. */
+  cameraAdjust?: CameraAdjust
 }
 
 /** Handle to the built world, used by the widget each frame. */
@@ -78,9 +98,12 @@ export const buildPracticeWorld = (
   const scene = new THREE.Scene()
   const { length: L, width: W, depth: D } = env.pool
 
-  // Underwater atmosphere: dense exponential fog + matching background.
+  // Underwater atmosphere: dense exponential fog + matching background +
+  // an environment map so clear/metal surfaces pick up subtle reflections.
   scene.background = new THREE.Color(WATER_COLOR)
   scene.fog = new THREE.FogExp2(WATER_COLOR, 0.07)
+  const envMap = gradientEnvironment()
+  if (envMap) scene.environment = envMap
 
   // Lighting: sky/depth hemisphere + a shadow-casting sun through the surface.
   scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x0c2d3f, 0.9))
@@ -128,9 +151,17 @@ export const buildPracticeWorld = (
     scene.add(wall)
   }
 
-  // Caustic shimmer above the floor.
+  // Caustic shimmer above the floor + slanting light shafts from the surface.
   const caustics = buildCaustics(L, W, D)
   scene.add(caustics.object)
+  const lightShafts = buildLightShafts(L, W, D)
+  scene.add(lightShafts.object)
+
+  // Representative current for visuals: stream particles, scale wave chop.
+  const flowDir = ((env.flow?.directionDeg ?? 0) * Math.PI) / 180
+  const flowSpeed = env.flow && env.flow.type !== 'waves' ? env.flow.speed * (env.flow.type === 'jet' ? 0.6 : 1) : 0
+  const repDrift: [number, number] = [Math.cos(flowDir) * flowSpeed, Math.sin(flowDir) * flowSpeed]
+  const waveAmp = env.flow?.type === 'waves' ? 1 + env.flow.speed * 3 : 1
 
   // Ice sheet with launch hole, or animated water surface seen from below.
   let water: ReturnType<typeof buildAnimatedWater> | undefined
@@ -166,7 +197,7 @@ export const buildPracticeWorld = (
     ice.position.y = 0
     scene.add(ice)
   } else {
-    water = buildAnimatedWater(L, W)
+    water = buildAnimatedWater(L, W, waveAmp)
     scene.add(water.object)
   }
 
@@ -207,9 +238,11 @@ export const buildPracticeWorld = (
   }
   syncObstacles()
 
-  // Drifting particulate.
-  const particles = buildDriftingParticles(L, W, D)
+  // Drifting particulate (streams with any current) + rising bubbles.
+  const particles = buildDriftingParticles(L, W, D, repDrift)
   scene.add(particles.object)
+  const bubbles = buildBubbles(L, W, D)
+  scene.add(bubbles.object)
 
   // The full rover model (visible in chase view), built from the profile.
   const rover = buildRoverModel(profile)
@@ -235,10 +268,21 @@ export const buildPracticeWorld = (
   const FP_MOUNT = new THREE.Vector3(0, mountH * 0.34, -mountL * 0.46)
   const FP_TILT = -0.14 // look slightly down so the claw stays in frame
 
-  const mountCameraFp = (): void => {
+  // Adjustable camera: the operator can look around (yaw/pitch offset) and zoom
+  // on top of the rigid mount / chase rig.
+  const mountCameraFp = (adjust?: CameraAdjust): void => {
     if (camera.parent !== rover.group) rover.group.add(camera)
     camera.position.copy(FP_MOUNT)
-    camera.rotation.set(FP_TILT, 0, 0)
+    camera.rotation.set(FP_TILT + (adjust?.pitch ?? 0), adjust?.yaw ?? 0, 0)
+  }
+  let lastFov = camera.fov
+  const applyZoom = (zoom: number): void => {
+    const fov = Math.min(110, Math.max(30, 80 / Math.max(0.4, zoom)))
+    if (Math.abs(fov - lastFov) > 0.01) {
+      camera.fov = fov
+      camera.updateProjectionMatrix()
+      lastFov = fov
+    }
   }
   mountCameraFp()
 
@@ -254,7 +298,11 @@ export const buildPracticeWorld = (
     caustics.update(elapsed)
     water?.update(elapsed)
     particles.update(elapsed)
+    bubbles.update(elapsed)
+    lightShafts.update(elapsed)
     syncObstacles()
+    const adjust = opts.cameraAdjust
+    applyZoom(adjust?.zoom ?? 1)
 
     // Rover model pose (same rotation convention as the camera).
     rover.group.position.set(pose.x, -pose.depth, pose.y)
@@ -269,13 +317,16 @@ export const buildPracticeWorld = (
     rover.group.visible = true
     const chase = opts.cameraMode === 'chase'
     if (chase) {
-      // Third-person: detach the camera and trail it behind/above the rover.
+      // Third-person orbit: trail behind/above the rover; drag orbits, wheel zooms.
       if (camera.parent !== scene) scene.add(camera)
-      const dist = Math.max(1.6, roverL * 3.2)
+      const dist = Math.max(1.6, roverL * 3.2) / Math.max(0.4, adjust?.zoom ?? 1)
+      const az = pose.heading + Math.PI + (adjust?.yaw ?? 0) // behind the rover by default
+      const el = Math.min(1.2, Math.max(-0.25, 0.42 + (adjust?.pitch ?? 0)))
+      const horiz = Math.cos(el) * dist
       const desired = new THREE.Vector3(
-        pose.x - Math.cos(pose.heading) * dist,
-        Math.min(-0.12, Math.max(-D + 0.25, -pose.depth + dist * 0.42)),
-        pose.y - Math.sin(pose.heading) * dist
+        pose.x + Math.cos(az) * horiz,
+        Math.min(-0.12, Math.max(-D + 0.25, -pose.depth + Math.sin(el) * dist)),
+        pose.y + Math.sin(az) * horiz
       )
       desired.x = Math.min(L - 0.3, Math.max(0.3, desired.x))
       desired.z = Math.min(W - 0.3, Math.max(0.3, desired.z))
@@ -289,9 +340,10 @@ export const buildPracticeWorld = (
       camera.lookAt(pose.x, -pose.depth, pose.y)
     } else {
       // First-person: the camera rides on the rover as a rigid body, so it
-      // inherits the vehicle's heading/pitch/roll automatically.
+      // inherits the vehicle's heading/pitch/roll automatically. The look
+      // offset lets the operator glance around without moving the vehicle.
       chaseInit = false
-      mountCameraFp()
+      mountCameraFp(adjust)
     }
 
     // Fog thickens slightly with depth for ambience.

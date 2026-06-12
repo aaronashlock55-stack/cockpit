@@ -66,10 +66,12 @@ export interface TetherState {
   heldObstacleId?: string
 }
 
-/** How far past an obstacle's radius the cable rides, meters. */
+/** How far past an obstacle's radius the cable corner rides, meters. */
 const SNAG_MARGIN = 0.06
-/** Extra clearance required before a wrap releases (hysteresis), meters. */
-const RELEASE_MARGIN = 0.25
+/** Capture distance: how close the cable must pass an obstacle to catch on it. */
+const CATCH_RADIUS = 0.32
+/** Extra clearance (past the capture distance) before a wrap releases. */
+const RELEASE_MARGIN = 0.5
 
 const segLen = (a: Point3, b: Point3): number => Math.hypot(b.x - a.x, b.y - a.y, b.depth - a.depth)
 
@@ -203,7 +205,7 @@ const releaseWraps = (state: TetherState, env: PracticeEnvironment): void => {
     }
     const before = wraps.length > 1 ? wraps[wraps.length - 2] : anchors[anchors.length - 1]
     const { dist } = closestApproach(before, rover, obstacle.position[0], obstacle.position[1])
-    if (dist > obstacleRadius(obstacle) + RELEASE_MARGIN) wraps.pop()
+    if (dist > obstacleRadius(obstacle) + CATCH_RADIUS + RELEASE_MARGIN) wraps.pop()
     else break
   }
 }
@@ -226,9 +228,12 @@ const snagWraps = (state: TetherState, env: PracticeEnvironment): void => {
     const { t, dist } = closestApproach(last, rover, ox, oy)
     if (t <= 0.05 || t >= 0.95) continue
     const r = obstacleRadius(obstacle)
-    if (dist >= r + SNAG_MARGIN || dist < 1e-4) continue
+    if (dist >= r + CATCH_RADIUS || dist < 1e-4) continue
+    // Depth band the cable plausibly occupies near this point, allowing for sag.
     const cornerDepth = last.depth + t * (rover.depth - last.depth)
-    if (cornerDepth < otop - 0.15 || cornerDepth > otop + obstacle.size[2] + 0.15) continue
+    const bandTop = Math.min(last.depth, rover.depth) - 0.2
+    const bandBottom = Math.max(last.depth, rover.depth) + 1.0
+    if (otop > bandBottom || otop + obstacle.size[2] < bandTop) continue
     const closeX = last.x + t * (rover.x - last.x)
     const closeY = last.y + t * (rover.y - last.y)
     const nx = (closeX - ox) / dist

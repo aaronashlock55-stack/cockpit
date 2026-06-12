@@ -13,6 +13,39 @@
 | 11 | Realism engine (profile-derived Fossen 6-DOF) + training course | — |
 | 12 | Full rover model + chase view, rigid-body contacts, visual realism | — |
 | 13 | Rigid-body camera (camera mounted on the rover) + tether snag physics | — |
+| 14 | Adjustable camera, water currents (wave pool / jet stream), graphics pass | — |
+
+## Phase 14 — Adjustable camera, currents & graphics
+
+**Camera you can move.** On top of FP/chase, the operator can **drag to look
+around**, **scroll to zoom**, and **double-click (or ⟳ Recenter) to reset**. In
+FP it's a look-offset on the rigid mount; in chase it orbits the vehicle.
+
+**The tether actually catches now.** The capture distance was widened and the
+depth check made sag-aware, and the training-course gate posts are now
+**full-height pillars** — drive the cable past one and it snags, bends around it,
+and you have to back out to free yourself (`tether (snagged)` in the status line).
+
+**Water currents — wave pool & jet stream.** New `flow` field on the
+environment, driven through **relative-velocity drag** (drag acts on the rover's
+speed *relative to the water*, so moving water pushes the vehicle):
+- **Steady current** — a uniform push across the whole pool.
+- **Wave pool** — oscillating near-surface orbital flow that calms with depth;
+  the rover gets shoved around near the top (the water surface visibly chops).
+- **Jet stream** — a fast band across the pool middle; cross it and you get
+  swept sideways. Configure type/speed/direction in Settings → Development, or
+  pick the **Wave pool** / **Jet stream channel** presets. Two new physics tests
+  cover the current push and that the jet only acts inside its band.
+
+**Graphics pass.** Environment-map reflections on clear/metal surfaces,
+**god-ray light shafts** from the surface, **rising bubbles**, particulate that
+**streams along the current** (so you can see flow direction), and wave chop that
+scales with the wave-pool speed.
+
+**For developers:** `flow` + `flowVelocity()` in `practice-environment.ts`,
+`SimState.time` + relative-velocity drag in `rover-simulator.ts`, new FX in
+`practice-3d-fx.ts`, camera adjust in `practice-3d-scene.ts` + the widget.
+54 practice tests (75 total).
 
 ## Phase 13 — Rigid camera & tether snagging
 

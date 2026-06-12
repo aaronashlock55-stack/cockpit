@@ -72,8 +72,65 @@ export interface PracticeEnvironment {
   }
   /** Obstacles / mission props. */
   obstacles: PracticeObstacle[]
+  /** Optional water motion (steady current, wave pool, or localized jet stream). */
+  flow?: FlowField
   /** Schema marker for validation / forward-compat. */
   schema: 'cockpit-practice-env/v1'
+}
+
+/** Moving water that pushes the rover, for current/wave/jet pilot training. */
+export interface FlowField {
+  /**
+   * current = steady uniform flow; waves = oscillating near-surface orbital flow
+   * (a wave pool); jet = a fast localized band across the pool (a jet stream).
+   */
+  type: 'current' | 'waves' | 'jet'
+  /** Flow heading in degrees (0 = +x along the pool length). */
+  directionDeg: number
+  /** Peak flow speed in m/s. */
+  speed: number
+  /** Jet only: band center across the pool width (y), meters. Defaults to mid-width. */
+  jetCenter?: number
+  /** Jet only: band half-width, meters. Defaults to 2. */
+  jetWidth?: number
+}
+
+/**
+ * Water velocity at a point and time, world frame (x along length, y across
+ * width, z positive DOWN). Returns [0,0,0] when there is no flow.
+ * @param {FlowField | undefined} flow The flow field, if any.
+ * @param {number} x Pool-local x, meters.
+ * @param {number} y Pool-local y, meters.
+ * @param {number} depth Depth, meters.
+ * @param {number} time Sim time, seconds.
+ * @returns {[number, number, number]} Water velocity [vx, vy, vDown], m/s.
+ */
+export const flowVelocity = (
+  flow: FlowField | undefined,
+  x: number,
+  y: number,
+  depth: number,
+  time: number
+): [number, number, number] => {
+  if (!flow || flow.speed === 0) return [0, 0, 0]
+  const dir = (flow.directionDeg * Math.PI) / 180
+  const dx = Math.cos(dir)
+  const dy = Math.sin(dir)
+  if (flow.type === 'current') return [dx * flow.speed, dy * flow.speed, 0]
+  if (flow.type === 'jet') {
+    const center = flow.jetCenter ?? 6
+    const halfWidth = flow.jetWidth ?? 2
+    const falloff = Math.exp(-((y - center) ** 2) / (2 * (halfWidth / 2) ** 2))
+    return [dx * flow.speed * falloff, dy * flow.speed * falloff, 0]
+  }
+  // waves: orbital velocity that decays with depth and oscillates in space/time.
+  const k = 0.55
+  const omega = 1.15
+  const decay = Math.exp(-k * Math.max(depth, 0))
+  const phase = k * (x * dx + y * dy) - omega * time
+  const horizontal = flow.speed * decay * Math.cos(phase)
+  const vertical = flow.speed * decay * Math.sin(phase) * 0.55
+  return [dx * horizontal, dy * horizontal, vertical]
 }
 
 /**
@@ -155,37 +212,38 @@ export const trainingCourseEnvironment: PracticeEnvironment = {
       yawDeg: -20,
       color: '#56e08e',
     },
-    // Corner slalom: post pairs to thread near the far corners.
+    // Corner slalom: full-height pillars to thread between — the tether catches
+    // on them, so wrap a post and you have to back out to free yourself.
     {
       id: 'gate-1l',
       name: 'Gate 1',
       shape: 'cylinder',
-      position: [24, 3, 2.0],
-      size: [0.11, 0.11, 2.0],
+      position: [22, 3, 0],
+      size: [0.16, 0.16, 4.0],
       color: '#ff8c42',
     },
     {
       id: 'gate-1r',
       name: 'Gate 1',
       shape: 'cylinder',
-      position: [24, 5, 2.0],
-      size: [0.11, 0.11, 2.0],
+      position: [22, 6, 0],
+      size: [0.16, 0.16, 4.0],
       color: '#ff8c42',
     },
     {
       id: 'gate-2l',
       name: 'Gate 2',
       shape: 'cylinder',
-      position: [26, 11, 2.0],
-      size: [0.11, 0.11, 2.0],
+      position: [26, 9, 0],
+      size: [0.16, 0.16, 4.0],
       color: '#ff8c42',
     },
     {
       id: 'gate-2r',
       name: 'Gate 2',
       shape: 'cylinder',
-      position: [26, 13, 2.0],
-      size: [0.11, 0.11, 2.0],
+      position: [26, 12, 0],
+      size: [0.16, 0.16, 4.0],
       color: '#ff8c42',
     },
     // Pickup objects on the floor (grab with the claw) + a basket to carry them back to.
@@ -234,10 +292,48 @@ export const openWaterEnvironment: PracticeEnvironment = {
   schema: 'cockpit-practice-env/v1',
 }
 
+// Wave pool: open water with a wave maker running down the length. Near the
+// surface the rover gets pushed around by the swell; it calms with depth.
+export const wavePoolEnvironment: PracticeEnvironment = {
+  name: 'Wave pool (surface chop)',
+  pool: { length: 40, width: 20, depth: 4 },
+  water: { salinityPpt: 0, temperatureC: 22 },
+  tether: { enabled: true, length: 35, attachPoint: [0, 10] },
+  obstacles: [
+    {
+      id: 'buoy',
+      name: 'Station buoy',
+      shape: 'cylinder',
+      position: [20, 10, 0],
+      size: [0.3, 0.3, 4],
+      color: '#ffd24a',
+    },
+  ],
+  flow: { type: 'waves', directionDeg: 0, speed: 0.6 },
+  schema: 'cockpit-practice-env/v1',
+}
+
+// Jet stream: a fast current confined to a band across the middle of the pool —
+// cross it and you get swept sideways, like a real river/tidal channel.
+export const jetStreamEnvironment: PracticeEnvironment = {
+  name: 'Jet stream channel',
+  pool: { length: 40, width: 20, depth: 4 },
+  water: { salinityPpt: 0, temperatureC: 22 },
+  tether: { enabled: true, length: 40, attachPoint: [0, 4] },
+  obstacles: [
+    { id: 'gate-a', name: 'Marker', shape: 'cylinder', position: [20, 7, 0], size: [0.16, 0.16, 4], color: '#ff8c42' },
+    { id: 'gate-b', name: 'Marker', shape: 'cylinder', position: [20, 13, 0], size: [0.16, 0.16, 4], color: '#ff8c42' },
+  ],
+  flow: { type: 'jet', directionDeg: 90, speed: 1.1, jetCenter: 10, jetWidth: 5 },
+  schema: 'cockpit-practice-env/v1',
+}
+
 export const builtInPracticeEnvironments: PracticeEnvironment[] = [
   trainingCourseEnvironment,
   mate2026IceTankEnvironment,
   mateRegionalEnvironment,
+  wavePoolEnvironment,
+  jetStreamEnvironment,
   openWaterEnvironment,
 ]
 

@@ -196,6 +196,44 @@
                 — edit via Download → JSON → Upload
               </span>
             </div>
+            <div class="flex flex-row flex-wrap items-center gap-x-4 gap-y-1">
+              <v-select
+                :model-value="activePracticeEnvironment.flow?.type ?? 'none'"
+                :items="flowTypes"
+                label="Water motion"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[180px]"
+                @update:model-value="setFlowType"
+              />
+              <template v-if="activePracticeEnvironment.flow">
+                <v-text-field
+                  v-model.number="activePracticeEnvironment.flow.speed"
+                  label="Flow speed (m/s)"
+                  type="number"
+                  density="compact"
+                  variant="outlined"
+                  theme="dark"
+                  hide-details
+                  class="max-w-[150px]"
+                />
+                <v-text-field
+                  v-model.number="activePracticeEnvironment.flow.directionDeg"
+                  label="Direction (°)"
+                  type="number"
+                  density="compact"
+                  variant="outlined"
+                  theme="dark"
+                  hide-details
+                  class="max-w-[130px]"
+                />
+                <span class="text-xs text-gray-400">
+                  {{ flowHint }}
+                </span>
+              </template>
+            </div>
           </div>
         </div>
         <ExpansiblePanel :is-expanded="!interfaceStore.isOnPhoneScreen" no-bottom-divider>
@@ -283,7 +321,7 @@ import { reloadCockpitAndWarnUser } from '@/libs/utils-vue'
 import { useAppInterfaceStore } from '@/stores/appInterface'
 import { useDevelopmentStore } from '@/stores/development'
 import { useMainVehicleStore } from '@/stores/mainVehicle'
-import { builtInPracticeEnvironments } from '@/types/practice-environment'
+import { type FlowField, builtInPracticeEnvironments } from '@/types/practice-environment'
 import { builtInRoverProfiles } from '@/types/rover-profile'
 
 import BaseConfigurationView from './BaseConfigurationView.vue'
@@ -352,6 +390,37 @@ const onUploadEnv = async (event: Event): Promise<void> => {
 const onResetSim = (): void => {
   resetPracticeSim()
   openSnackbar({ variant: 'info', message: 'Rover reset to start position.', duration: 2000 })
+}
+
+const flowTypes = [
+  { title: 'None (still water)', value: 'none' },
+  { title: 'Steady current', value: 'current' },
+  { title: 'Wave pool', value: 'waves' },
+  { title: 'Jet stream', value: 'jet' },
+]
+
+const flowHint = computed(() => {
+  const f = activePracticeEnvironment.value.flow
+  if (!f) return ''
+  if (f.type === 'waves') return 'Surface chop — strongest near the top, calms with depth.'
+  if (f.type === 'jet') return 'Fast band across the pool middle; the rest is calm.'
+  return 'Uniform push across the whole pool.'
+})
+
+const setFlowType = (type: string): void => {
+  const env = activePracticeEnvironment.value
+  if (type === 'none') {
+    env.flow = undefined
+    return
+  }
+  const speed = env.flow?.speed ?? (type === 'jet' ? 1.1 : 0.6)
+  const directionDeg = env.flow?.directionDeg ?? (type === 'jet' ? 90 : 0)
+  const flow: FlowField = { type: type as FlowField['type'], speed, directionDeg }
+  if (type === 'jet') {
+    flow.jetCenter = env.flow?.jetCenter ?? env.pool.width / 2
+    flow.jetWidth = env.flow?.jetWidth ?? Math.max(2, env.pool.width / 4)
+  }
+  env.flow = flow
 }
 
 const onImportFromVehicle = (): void => {
