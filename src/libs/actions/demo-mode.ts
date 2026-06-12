@@ -1,12 +1,12 @@
 import { unit } from 'mathjs'
 
 import { joystickManager } from '@/libs/joystick/manager'
-import { type SimState, initialSimState, stepSimulation } from '@/libs/rover-simulator'
+import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { useMainVehicleStore } from '@/stores/mainVehicle'
 import { type BodyAxes } from '@/types/rover-profile'
 
 import { createDataLakeVariable, getDataLakeVariableInfo, setDataLakeVariableData } from './data-lake'
-import { activeRoverProfile, isDemoModeActive } from './demo-mode-state'
+import { activePracticeEnvironment, activeRoverProfile, isDemoModeActive, practiceSimReadout } from './demo-mode-state'
 
 /**
  * Practice / Demo mode driver.
@@ -35,9 +35,13 @@ const arduSubModes = new Map<string, number>([
   ['AUTO', 3],
 ])
 
-let simState: SimState = initialSimState()
+let simState: SimState = initialSimState(activePracticeEnvironment.value)
 let loopTimer: ReturnType<typeof setInterval> | undefined
 let elapsed = 0
+
+// Map anchor for converting pool-local meters to lat/lon (arbitrary but valid).
+const ORIGIN_LAT = 47.3977
+const ORIGIN_LON = 8.5456
 
 // Latest raw joystick axes, updated by a one-time subscription (the manager has no
 // unsubscribe API, so we read into a module variable rather than re-subscribing).
@@ -90,6 +94,7 @@ const demoDataLakeIds = [
   'VFR_HUD/alt',
   'VFR_HUD/groundspeed',
   'BATTERY_STATUS/voltages',
+  'PRACTICE/tether-deployed',
 ]
 
 /**
@@ -100,7 +105,7 @@ export const startDemoMode = (): void => {
   if (isDemoModeActive.value) return
   const store = useMainVehicleStore()
 
-  simState = initialSimState()
+  simState = initialSimState(activePracticeEnvironment.value)
   elapsed = 0
   isDemoModeActive.value = true
 
@@ -113,18 +118,34 @@ export const startDemoMode = (): void => {
 
   loopTimer = setInterval(() => {
     elapsed += dt
-    simState = stepSimulation(simState, activeRoverProfile.value, currentDemand(), dt)
+    const env = activePracticeEnvironment.value
+    simState = stepSimulation(simState, activeRoverProfile.value, env, currentDemand(), dt)
 
     const depth = simState.depth
     const headingDeg = (simState.heading * 180) / Math.PI
     const battery = 16.8 - 0.0008 * elapsed - 0.05 * Math.abs(simState.surgeVel)
+    const tetherDeployed = tetherDeployedLength(simState, env)
+
+    // Publish the pool-local readout for the practice pool-view widget.
+    practiceSimReadout.value = {
+      x: simState.x,
+      y: simState.y,
+      depth,
+      heading: simState.heading,
+      tetherDeployed,
+      collidedWith: simState.collidedWith,
+    }
+
+    // Convert pool-local meters to lat/lon for the map widget (x = north, y = east).
+    const metersPerDegLat = 111320
+    const metersPerDegLon = 111320 * Math.cos((ORIGIN_LAT * Math.PI) / 180)
 
     // Path 1: reactive store objects (read directly by Attitude/Compass/Depth/Battery widgets).
     Object.assign(store.attitude, { roll: simState.roll, pitch: simState.pitch, yaw: simState.heading })
     Object.assign(store.altitude, { msl: unit(-depth, 'm'), rel: -depth })
     Object.assign(store.coordinates, {
-      latitude: simState.latitude,
-      longitude: simState.longitude,
+      latitude: ORIGIN_LAT + simState.x / metersPerDegLat,
+      longitude: ORIGIN_LON + simState.y / metersPerDegLon,
       altitude: -depth,
       precision: 1,
     })
@@ -146,7 +167,17 @@ export const startDemoMode = (): void => {
     setDataLakeVariableData('VFR_HUD/alt', -depth)
     setDataLakeVariableData('VFR_HUD/groundspeed', Math.hypot(simState.surgeVel, simState.swayVel))
     setDataLakeVariableData('BATTERY_STATUS/voltages', battery)
+    setDataLakeVariableData('PRACTICE/tether-deployed', tetherDeployed)
   }, 1000 / SIM_HZ)
+}
+
+/**
+ * Reset the simulated rover to the environment's start position (e.g. after the
+ * user switches environments, so the rover is never stranded outside the pool).
+ * @returns {void}
+ */
+export const resetPracticeSim = (): void => {
+  simState = initialSimState(activePracticeEnvironment.value)
 }
 
 /**
@@ -157,4 +188,5 @@ export const stopDemoMode = (): void => {
   if (loopTimer) clearInterval(loopTimer)
   loopTimer = undefined
   isDemoModeActive.value = false
+  practiceSimReadout.value = null
 }

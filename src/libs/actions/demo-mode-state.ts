@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 
+import { type PracticeEnvironment, defaultPracticeEnvironment } from '@/types/practice-environment'
 import { type RoverProfile, defaultRoverProfile } from '@/types/rover-profile'
 
 /**
@@ -12,3 +13,25 @@ export const isDemoModeActive = ref(false)
 
 /** The rover profile currently driving the simulator (built-in, uploaded, or imported). */
 export const activeRoverProfile = ref<RoverProfile>(defaultRoverProfile)
+
+/** The practice environment (pool, water, ice, tether, obstacles) the sim runs in. */
+export const activePracticeEnvironment = ref<PracticeEnvironment>(defaultPracticeEnvironment)
+
+/** Live readout for UI (pool-view widget); written by the demo driver each tick. */
+export interface PracticeSimReadout {
+  /** Pool-local x in meters. */
+  x: number
+  /** Pool-local y in meters. */
+  y: number
+  /** Depth in meters. */
+  depth: number
+  /** Heading in radians. */
+  heading: number
+  /** Deployed tether length in meters. */
+  tetherDeployed: number
+  /** Whatever the rover is currently touching, if anything. */
+  collidedWith?: string
+}
+
+/** Latest sim readout, or null when the sim is not running. */
+export const practiceSimReadout = ref<PracticeSimReadout | null>(null)
