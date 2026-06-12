@@ -7,8 +7,42 @@
 | Phase | Feature | Commit |
 |---|---|---|
 | 6 | Practice / Demo mode (simulate your rover, no hardware) | `21c8520` |
+| 6.5 | Practice environments: pool/water/ice/tether/obstacles + MATE 2026 preset | `4d2b370` |
 | 7 | Video HUD overlay (heading/depth/attitude on the feed) | `57e9cd9` |
 | 8 | Pilot-assist quick controls (one-tap modes) | `3368214` |
+
+## Phase 6.5 — Practice environments (pool, water, tether, MATE props)
+
+**What it does:** the practice sim runs inside a configurable **environment**:
+pool dimensions, water salinity/temperature (drives buoyancy — salty water
+floats the rover up), an optional **ice sheet with a launch hole**, a **tether**
+(hard length limit + drag that grows with deployment), and **obstacles/mission
+props** with collision.
+
+**The MATE 2026 preset is built from the official preview mission**: the NRC ice
+tank (90 × 12 × 3 m), EGADS water at specific gravity ~1.025, a 1 m × 1 m launch
+hole in the ice, and the vertical profiling float (18 cm × 1 m) as a prop.
+Regional-pool and open-pool presets are included.
+
+**For operators**
+- Settings → Development (with Practice mode on): pick an **Environment** preset,
+  tweak pool length/width/depth, salinity, temperature, and tether on/off + length.
+  Upload/Download environments as JSON to share prop layouts; **Reset rover**
+  re-spawns at the start (the ice hole, in the MATE preset).
+- Add the **PracticePoolView** widget: live top-down view of the pool, ice +
+  hole, props, the tether (dashed = slack, red = taut), and the rover (flashes
+  red on contact, with the contacted object named in the status bar).
+- Surfacing under the ice is blocked (like the real penalty); only the launch
+  hole lets you surface. Saltier water = the rover slowly floats up unless you
+  push down — retune your instincts per venue.
+
+**For developers**
+- `src/types/practice-environment.ts` — env schema (`cockpit-practice-env/v1`),
+  presets, `waterDensity()`.
+- `src/libs/rover-simulator.ts` — environment physics (bounds, buoyancy, ice,
+  obstacles, tether). **9 vitest tests** in `src/tests/libs/rover-simulator.test.ts`.
+- `src/components/widgets/PracticePoolView.vue` — the top-down widget.
+- `src/libs/practice-env-io.ts` — upload/download.
 
 ---
 
