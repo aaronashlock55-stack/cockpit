@@ -114,3 +114,103 @@ describe('stepSimulation environment physics', () => {
     expect(withTether.surgeVel).toBeLessThan(withoutTether.surgeVel)
   })
 })
+
+describe('inertia and momentum (Fossen-style feel)', () => {
+  it('accelerates gradually from rest (added mass + thruster spool)', () => {
+    const env = makeEnv()
+    const after200ms = run(env, { ...zeroDemand, surge: 1 }, 5)
+    const terminal = run(env, { ...zeroDemand, surge: 1 }, 500)
+    expect(after200ms.surgeVel).toBeLessThan(0.5 * terminal.surgeVel)
+    expect(terminal.surgeVel).toBeGreaterThan(0.8) // believable top speed ~1 m/s
+    expect(terminal.surgeVel).toBeLessThan(1.6)
+  })
+
+  it('coasts after the sticks are released instead of stopping dead', () => {
+    const env = makeEnv()
+    const cruising = run(env, { ...zeroDemand, surge: 1 }, 150)
+    const peak = cruising.surgeVel
+    const oneSecLater = run(env, zeroDemand, 25, { ...cruising })
+    expect(oneSecLater.surgeVel).toBeGreaterThan(0.3 * peak) // still gliding
+    expect(oneSecLater.surgeVel).toBeLessThan(peak) // but slowing
+  })
+
+  it('pitch disturbance settles back with a damped wobble (righting moment)', () => {
+    const env = makeEnv()
+    const disturbed = { ...initialSimState(env), pitch: 0.3 }
+    const settled = run(env, zeroDemand, 250, disturbed)
+    expect(Math.abs(settled.pitch)).toBeLessThan(0.03)
+  })
+})
+
+describe('gripper', () => {
+  const floatEnv = (): PracticeEnvironment =>
+    makeEnv({
+      obstacles: [{ id: 'float', name: 'float', shape: 'cylinder', position: [5, 5, 0.5], size: [0.18, 0.18, 1] }],
+    })
+
+  /**
+   * Step with the claw commanded closed or open.
+   * @param {PracticeEnvironment} env The environment to simulate in.
+   * @param {number} steps Number of 40 ms steps to run.
+   * @param {ReturnType<typeof initialSimState>} start Starting state.
+   * @param {boolean} gripperClosed Commanded claw state.
+   * @returns {ReturnType<typeof stepSimulation>} Final state.
+   */
+  const runGrip = (
+    env: PracticeEnvironment,
+    steps: number,
+    start: ReturnType<typeof initialSimState>,
+    gripperClosed: boolean
+  ): ReturnType<typeof stepSimulation> => {
+    let state = start
+    for (let i = 0; i < steps; i++) {
+      state = stepSimulation(state, blueRov2HeavyProfile, env, zeroDemand, 0.04, { gripperClosed })
+    }
+    return state
+  }
+
+  it('grabs a small obstacle within reach and holds it', () => {
+    const env = floatEnv()
+    // Park right in front of the float (nose ~0.75 m ahead), facing it.
+    const start = { ...initialSimState(env), x: 4.3, y: 5, depth: 1, heading: 0 }
+    const state = runGrip(env, 30, start, true)
+    expect(state.gripper).toBeGreaterThan(0.9)
+    expect(state.heldObstacleId).toBe('float')
+  })
+
+  it('a held obstacle follows the claw as the rover moves', () => {
+    const env = floatEnv()
+    const start = { ...initialSimState(env), x: 4.3, y: 5, depth: 1, heading: 0 }
+    let state = runGrip(env, 30, start, true)
+    // Drive backward while holding.
+    for (let i = 0; i < 50; i++) {
+      state = stepSimulation(state, blueRov2HeavyProfile, env, { ...zeroDemand, surge: -0.6 }, 0.04, {
+        gripperClosed: true,
+      })
+    }
+    const held = env.obstacles[0]
+    expect(state.heldObstacleId).toBe('float')
+    // The float should have moved with us (it started at x=5).
+    expect(held.position[0]).toBeLessThan(4.9)
+    expect(Math.hypot(held.position[0] - state.x, held.position[1] - state.y)).toBeLessThan(1.2)
+  })
+
+  it('opening the claw releases the held obstacle', () => {
+    const env = floatEnv()
+    const start = { ...initialSimState(env), x: 4.3, y: 5, depth: 1, heading: 0 }
+    let state = runGrip(env, 30, start, true)
+    expect(state.heldObstacleId).toBe('float')
+    state = runGrip(env, 10, state, false)
+    expect(state.heldObstacleId).toBeUndefined()
+    expect(state.gripper).toBeLessThan(0.2)
+  })
+
+  it('cannot grab obstacles larger than the claw', () => {
+    const env = makeEnv({
+      obstacles: [{ id: 'crate', name: 'big crate', shape: 'box', position: [5, 5, 0.5], size: [1.5, 1.5, 1] }],
+    })
+    const start = { ...initialSimState(env), x: 4.0, y: 5, depth: 1, heading: 0 }
+    const state = runGrip(env, 30, start, true)
+    expect(state.heldObstacleId).toBeUndefined()
+  })
+})

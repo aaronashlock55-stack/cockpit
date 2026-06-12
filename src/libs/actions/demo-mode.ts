@@ -70,8 +70,16 @@ const keyTargetIsTyping = (event: KeyboardEvent): boolean => {
   return !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
 }
 
+// Commanded claw state (toggled by key/button); consumed by the sim each tick.
+export const gripperClosedTarget = { value: false }
+
 const onKeyDown = (event: KeyboardEvent): void => {
   if (keyTargetIsTyping(event)) return
+  // G (or Space) toggles the claw — on the initial press only, not key repeat.
+  if (!event.repeat && (event.key.toLowerCase() === 'g' || event.key === ' ')) {
+    gripperClosedTarget.value = !gripperClosedTarget.value
+    if (event.key === ' ') event.preventDefault()
+  }
   pressedKeys.add(event.key.toLowerCase())
   // Keep arrows from scrolling the page while flying.
   if (event.key.startsWith('Arrow')) event.preventDefault()
@@ -188,14 +196,16 @@ export const startDemoMode = async (): Promise<void> => {
   loopTimer = setInterval(() => {
     elapsed += dt
     const env = activePracticeEnvironment.value
-    simState = stepSimulation(simState, activeRoverProfile.value, env, currentDemand(), dt)
+    simState = stepSimulation(simState, activeRoverProfile.value, env, currentDemand(), dt, {
+      gripperClosed: gripperClosedTarget.value,
+    })
 
     const depth = simState.depth
     const headingDeg = (simState.heading * 180) / Math.PI
     const battery = 16.8 - 0.0008 * elapsed - 0.05 * Math.abs(simState.surgeVel)
     const tetherDeployed = tetherDeployedLength(simState, env)
 
-    // Publish the pool-local readout for the practice pool-view widget.
+    // Publish the pool-local readout for the practice widgets.
     practiceSimReadout.value = {
       x: simState.x,
       y: simState.y,
@@ -203,6 +213,8 @@ export const startDemoMode = async (): Promise<void> => {
       heading: simState.heading,
       tetherDeployed,
       collidedWith: simState.collidedWith,
+      gripper: simState.gripper,
+      heldObstacleId: simState.heldObstacleId,
     }
 
     // Convert pool-local meters to lat/lon for the map widget (x = north, y = east).

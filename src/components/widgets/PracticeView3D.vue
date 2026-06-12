@@ -9,7 +9,9 @@
       <VideoHudOverlay v-if="widget.options.showHud" />
       <div class="bottom-hints">
         <span v-if="readout.collidedWith" class="collision">⚠ {{ readout.collidedWith }}</span>
-        <span class="keys">gamepad — or W A S D move · ← → turn · ↑ ↓ depth</span>
+        <span v-if="heldName" class="holding">✊ holding: {{ heldName }}</span>
+        <span v-else-if="(readout.gripper ?? 0) > 0.5" class="holding dim">claw closed</span>
+        <span class="keys">W A S D move · ← → turn · ↑ ↓ depth · G claw</span>
       </div>
     </template>
   </div>
@@ -38,6 +40,12 @@ const container = ref<HTMLDivElement>()
 const canvas = ref<HTMLCanvasElement>()
 const readout = computed(() => practiceSimReadout.value)
 
+const heldName = computed(() => {
+  const id = practiceSimReadout.value?.heldObstacleId
+  if (!id) return undefined
+  return activePracticeEnvironment.value.obstacles.find((o) => o.id === id)?.name ?? id
+})
+
 let renderer: THREE.WebGLRenderer | undefined
 let world: PracticeWorld | undefined
 let animationFrame: number | undefined
@@ -63,14 +71,17 @@ const renderLoop = (): void => {
   if (!renderer || !world) return
   const r = practiceSimReadout.value
   if (!r) return
-  world.update({
-    x: r.x,
-    y: r.y,
-    depth: r.depth,
-    heading: r.heading,
-    pitch: vehicleStore.attitude.pitch ?? 0,
-    roll: vehicleStore.attitude.roll ?? 0,
-  })
+  world.update(
+    {
+      x: r.x,
+      y: r.y,
+      depth: r.depth,
+      heading: r.heading,
+      pitch: vehicleStore.attitude.pitch ?? 0,
+      roll: vehicleStore.attitude.roll ?? 0,
+    },
+    r.gripper ?? 0
+  )
   renderer.render(world.scene, world.camera)
 }
 
@@ -158,5 +169,13 @@ onBeforeUnmount(() => {
 .bottom-hints .collision {
   color: rgb(255 110 110);
   font-weight: 700;
+}
+.bottom-hints .holding {
+  color: rgb(120 230 140);
+  font-weight: 700;
+}
+.bottom-hints .holding.dim {
+  color: rgb(200 220 200 / 80%);
+  font-weight: 400;
 }
 </style>

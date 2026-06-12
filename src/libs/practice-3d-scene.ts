@@ -21,8 +21,8 @@ export interface PracticeWorld {
   scene: THREE.Scene
   /** First-person camera (ROV's forward camera). */
   camera: THREE.PerspectiveCamera
-  /** Tether line endpoint updater + camera pose updater, called each frame. */
-  update: (pose: CameraPose) => void
+  /** Per-frame updater: camera pose, claw closure (0..1), and obstacle sync. */
+  update: (pose: CameraPose, gripperClosure?: number) => void
   /** Free GPU/heap resources. */
   dispose: () => void
 }
@@ -171,9 +171,10 @@ export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
     scene.add(surface)
   }
 
-  // Obstacles / mission props.
+  // Obstacles / mission props. Meshes are tracked so positions re-sync every
+  // frame (a grabbed prop follows the claw; the sim mutates env positions).
+  const obstacleMeshes = new Map<string, THREE.Mesh>()
   for (const obstacle of env.obstacles) {
-    const [ox, oy, otop] = obstacle.position
     const height = obstacle.size[2]
     const color = new THREE.Color(obstacle.color ?? '#ffd24a')
     const material = new THREE.MeshLambertMaterial({ color })
@@ -182,9 +183,17 @@ export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
         ? new THREE.Mesh(new THREE.CylinderGeometry(obstacle.size[0] / 2, obstacle.size[0] / 2, height, 24), material)
         : new THREE.Mesh(new THREE.BoxGeometry(obstacle.size[0], height, obstacle.size[1]), material)
     mesh.name = `obstacle-${obstacle.id}`
-    mesh.position.set(ox, -(otop + height / 2), oy)
+    obstacleMeshes.set(obstacle.id, mesh)
     scene.add(mesh)
   }
+  const syncObstacles = (): void => {
+    for (const obstacle of env.obstacles) {
+      const mesh = obstacleMeshes.get(obstacle.id)
+      if (!mesh) continue
+      mesh.position.set(obstacle.position[0], -(obstacle.position[2] + obstacle.size[2] / 2), obstacle.position[1])
+    }
+  }
+  syncObstacles()
 
   // Tether: a sagging curve from the attach point (surface) to the rover, updated each frame.
   let tether: THREE.Line | undefined
@@ -214,11 +223,77 @@ export const buildPracticeWorld = (env: PracticeEnvironment): PracticeWorld => {
   particles.name = 'particles'
   scene.add(particles)
 
-  // First-person camera: wide angle like a typical ROV camera.
-  const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.05, 250)
+  // First-person camera: wide angle like a typical ROV camera. The camera is
+  // added to the scene so vehicle-fixed children (frame, claw) render with it.
+  const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.02, 250)
+  scene.add(camera)
+
+  // Vehicle frame visible at the edges of view — real ROV cameras sit inside
+  // the frame, so the operator always sees a bit of their own vehicle.
+  const frameMaterial = new THREE.MeshLambertMaterial({ color: 0x12181c })
+  const accentMaterial = new THREE.MeshLambertMaterial({ color: 0x1b6f9e })
+  const frameGroup = new THREE.Group()
+  frameGroup.name = 'vehicle-frame'
+  // Top frame bar across the upper edge.
+  const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.05), frameMaterial)
+  topBar.position.set(0, 0.165, -0.3)
+  frameGroup.add(topBar)
+  // Side rails in the lower corners (the classic BlueROV2 side plates).
+  for (const side of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.16, 0.22), accentMaterial)
+    rail.position.set(side * 0.225, -0.1, -0.28)
+    rail.rotation.z = side * -0.12
+    frameGroup.add(rail)
+  }
+  // Two small light pods top corners.
+  for (const side of [-1, 1]) {
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.05, 12), frameMaterial)
+    pod.rotation.x = Math.PI / 2
+    pod.position.set(side * 0.19, 0.145, -0.29)
+    frameGroup.add(pod)
+  }
+  camera.add(frameGroup)
+
+  // Claw (Newton-gripper style): two jaws at the bottom-center of view that
+  // rotate together as the claw closes.
+  const jawMaterial = new THREE.MeshLambertMaterial({ color: 0x202a30 })
+  const clawGroup = new THREE.Group()
+  clawGroup.name = 'claw'
+  clawGroup.position.set(0, -0.16, -0.3)
+  const jawPivots: THREE.Group[] = []
+  for (const side of [-1, 1]) {
+    const pivot = new THREE.Group()
+    pivot.position.x = side * 0.035
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.03, 0.16), jawMaterial)
+    jaw.position.set(0, 0, -0.08) // extend forward from the pivot
+    pivot.add(jaw)
+    // Jaw tip teeth.
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.026, 0.03), jawMaterial)
+    tip.position.set(side * -0.012, 0, -0.155)
+    tip.rotation.y = side * -0.35
+    pivot.add(tip)
+    clawGroup.add(pivot)
+    jawPivots.push(pivot)
+  }
+  // Claw wrist/base.
+  const wrist = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.06, 12), frameMaterial)
+  wrist.rotation.x = Math.PI / 2
+  wrist.position.z = 0.04
+  clawGroup.add(wrist)
+  camera.add(clawGroup)
+
+  const setClawClosure = (closure: number): void => {
+    // Open = jaws splayed outward (~30 deg); closed = parallel.
+    const angle = (1 - closure) * 0.5
+    jawPivots[0].rotation.y = -angle
+    jawPivots[1].rotation.y = angle
+  }
+  setClawClosure(0)
 
   const attach = new THREE.Vector3(env.tether.attachPoint[0], 0, env.tether.attachPoint[1])
-  const update = (pose: CameraPose): void => {
+  const update = (pose: CameraPose, gripperClosure = 0): void => {
+    setClawClosure(gripperClosure)
+    syncObstacles()
     camera.position.set(pose.x, -pose.depth, pose.y)
     // Three.js cameras look down -Z; a -90° base yaw makes heading 0 look toward
     // pool +x, and heading increases clockwise (toward pool +y / three +Z).

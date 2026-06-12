@@ -31,6 +31,10 @@ export interface PracticeSimReadout {
   tetherDeployed: number
   /** Whatever the rover is currently touching, if anything. */
   collidedWith?: string
+  /** Claw closure, 0 = open .. 1 = closed. */
+  gripper?: number
+  /** Id of the obstacle currently held by the claw, if any. */
+  heldObstacleId?: string
 }
 
 /** Latest sim readout, or null when the sim is not running. */
