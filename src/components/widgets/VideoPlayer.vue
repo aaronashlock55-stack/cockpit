@@ -62,6 +62,7 @@
     <video id="mainDisplayStream" ref="videoElement" muted autoplay playsinline disablePictureInPicture>
       Your browser does not support the video tag.
     </video>
+    <VideoHudOverlay v-if="widget.options.showHudOverlay" />
   </div>
   <v-dialog v-model="widgetStore.widgetManagerVars(widget.hash).configMenuOpen" width="auto">
     <v-card class="pa-4 text-white" style="border-radius: 15px" :style="interfaceStore.globalGlassMenuStyles">
@@ -157,6 +158,13 @@
           :color="widget.options.showVerboseLoading ? 'white' : undefined"
           hide-details
         />
+        <v-switch
+          v-model="widget.options.showHudOverlay"
+          class="my-1"
+          label="HUD overlay (heading / depth / attitude)"
+          :color="widget.options.showHudOverlay ? 'white' : undefined"
+          hide-details
+        />
         <div class="flex-wrap justify-center d-flex ga-5">
           <v-btn prepend-icon="mdi-file-rotate-left" variant="outlined" @click="rotateVideo(-90)"> Rotate Left</v-btn>
           <v-btn prepend-icon="mdi-file-rotate-right" variant="outlined" @click="rotateVideo(+90)"> Rotate Right</v-btn>
@@ -170,6 +178,7 @@
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeMount, onBeforeUnmount, ref, toRefs, watch } from 'vue'
 
+import VideoHudOverlay from '@/components/VideoHudOverlay.vue'
 import StatsForNerds from '@/components/VideoPlayerStatsForNerds.vue'
 import { useAppInterfaceStore } from '@/stores/appInterface'
 import { useVideoStore } from '@/stores/video'
@@ -224,6 +233,7 @@ onBeforeMount(() => {
     statsForNerds: false,
     internalStreamName: undefined as string | undefined,
     showVerboseLoading: false,
+    showHudOverlay: false,
   }
   widget.value.options = { ...defaultOptions, ...widget.value.options }
   nameSelectedStream.value = widget.value.options.internalStreamName

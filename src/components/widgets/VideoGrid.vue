@@ -16,6 +16,13 @@
           :class="{ 'mode-active': widget.options.layoutMode === mode.value }"
           @click.stop="widget.options.layoutMode = mode.value"
         />
+        <v-btn
+          icon="mdi-gauge"
+          size="x-small"
+          variant="text"
+          :class="{ 'mode-active': widget.options.showHud }"
+          @click.stop="widget.options.showHud = !widget.options.showHud"
+        />
       </div>
       <!-- Grid mode: all feeds tiled equally. PiP/Focused: active feed full-bleed. -->
       <div class="feeds-container" :class="widget.options.layoutMode" :style="gridStyle">
@@ -34,6 +41,7 @@
             disablePictureInPicture
           />
           <span class="feed-label">{{ stream.name }}</span>
+          <VideoHudOverlay v-if="widget.options.showHud && stream.name === activeStreamName" />
           <div v-if="!connectedStreams[stream.name]" class="feed-connecting">
             <v-progress-circular indeterminate size="22" width="2" />
           </div>
@@ -68,6 +76,7 @@
 <script setup lang="ts">
 import { computed, onBeforeMount, onBeforeUnmount, reactive, toRefs } from 'vue'
 
+import VideoHudOverlay from '@/components/VideoHudOverlay.vue'
 import { useVideoStore } from '@/stores/video'
 import type { Widget } from '@/types/widgets'
 
@@ -89,7 +98,7 @@ const layoutModes = [
 ]
 
 onBeforeMount(() => {
-  const defaultOptions = { layoutMode: 'grid' }
+  const defaultOptions = { layoutMode: 'grid', showHud: false }
   widget.value.options = { ...defaultOptions, ...widget.value.options }
 })
 
