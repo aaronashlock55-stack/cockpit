@@ -1,8 +1,11 @@
 import { unit } from 'mathjs'
 
-import { joystickManager } from '@/libs/joystick/manager'
 import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
-import { useMainVehicleStore } from '@/stores/mainVehicle'
+// NOTE: the vehicle store and joystick manager are loaded lazily inside
+// startDemoMode(). Importing them statically from here (which the development
+// store pulls in at boot) changes the production bundle's module evaluation
+// order and crashes with 'Cannot access mavlinkManualControlAxes before
+// initialization' (a circular-import TDZ in the joystick protocol graph).
 import { type BodyAxes } from '@/types/rover-profile'
 
 import { createDataLakeVariable, getDataLakeVariableInfo, setDataLakeVariableData } from './data-lake'
@@ -47,10 +50,17 @@ const ORIGIN_LON = 8.5456
 // unsubscribe API, so we read into a module variable rather than re-subscribing).
 let latestAxes: number[] = []
 let lastJoystickActivity = 0
-joystickManager.onJoystickStateUpdate((event) => {
-  latestAxes = event.calibratedState.axes.map((a) => a ?? 0)
-  if (latestAxes.some((a) => Math.abs(a) > 0.08)) lastJoystickActivity = performance.now()
-})
+let joystickSubscribed = false
+
+const subscribeToJoystick = async (): Promise<void> => {
+  if (joystickSubscribed) return
+  joystickSubscribed = true
+  const { joystickManager } = await import('@/libs/joystick/manager')
+  joystickManager.onJoystickStateUpdate((event) => {
+    latestAxes = event.calibratedState.axes.map((a) => a ?? 0)
+    if (latestAxes.some((a) => Math.abs(a) > 0.08)) lastJoystickActivity = performance.now()
+  })
+}
 
 /**
  * Build the control demand for this tick from the gamepad (if active) or an automated pattern.
@@ -99,11 +109,14 @@ const demoDataLakeIds = [
 
 /**
  * Start Practice/Demo mode: seed a fake ArduSub vehicle and begin the sim loop.
- * @returns {void}
+ * Loads the vehicle store and joystick manager lazily (see import note above).
+ * @returns {Promise<void>} Resolves once the sim loop is running.
  */
-export const startDemoMode = (): void => {
+export const startDemoMode = async (): Promise<void> => {
   if (isDemoModeActive.value) return
+  const { useMainVehicleStore } = await import('@/stores/mainVehicle')
   const store = useMainVehicleStore()
+  await subscribeToJoystick()
 
   simState = initialSimState(activePracticeEnvironment.value)
   elapsed = 0
