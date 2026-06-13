@@ -5,6 +5,7 @@ import { applyExpo, stepDemandEnvelope } from '@/libs/input-shaping'
 import { type PracticePoseFrame } from '@/libs/practice-interp'
 import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { tetherFullPath } from '@/libs/rover-tether'
+import { type SensorPose, computeSensorReadout, defaultSonarOptions, sonarBeam } from '@/libs/sim-sensors'
 import { type DiveLogFrame } from '@/types/dive-log'
 import { clonePracticeEnvironment } from '@/types/practice-environment'
 // NOTE: the vehicle store and joystick manager are loaded lazily inside
@@ -149,6 +150,22 @@ export const repositionPracticeSim = (frame: DiveLogFrame): void => {
 const ORIGIN_LAT = 47.3977
 const ORIGIN_LON = 8.5456
 
+// Ping360-style scanning sonar: a persistent ring of range bins that a sweep
+// refreshes a few at a time (a mechanical scanner only points one way at once).
+const sonarBins = new Array<number>(defaultSonarOptions.bins).fill(defaultSonarOptions.maxRangeM)
+let sonarHead = 0
+const SONAR_BINS_PER_TICK = 5
+
+const sensorPose = (): SensorPose => ({
+  x: simState.x,
+  y: simState.y,
+  depth: simState.depth,
+  heading: simState.heading,
+  surgeVel: simState.surgeVel,
+  swayVel: simState.swayVel,
+  heaveVel: simState.heaveVel,
+})
+
 // Latest raw joystick axes, updated by a one-time subscription (the manager has no
 // unsubscribe API, so we read into a module variable rather than re-subscribing).
 let latestAxes: number[] = []
@@ -287,6 +304,10 @@ const demoDataLakeIds = [
   'VFR_HUD/groundspeed',
   'BATTERY_STATUS/voltages',
   'PRACTICE/tether-deployed',
+  'DVL/altitude',
+  'DVL/ground-velocity',
+  'PING/altitude',
+  'SONAR/forward-range',
 ]
 
 /**
@@ -309,6 +330,8 @@ export const startDemoMode = async (): Promise<void> => {
   activeReplay.value = null
   replayMode.value = null
   resetInstructorState()
+  sonarBins.fill(defaultSonarOptions.maxRangeM)
+  sonarHead = 0
   isDemoModeActive.value = true
   beginPracticeRecording()
 
@@ -406,6 +429,15 @@ export const startDemoMode = async (): Promise<void> => {
     const battery = 16.8 - 0.0008 * elapsed - 0.05 * Math.abs(simState.surgeVel)
     const tetherDeployed = tetherDeployedLength(simState, env)
 
+    // Simulated sensor suite (UWSim-style): scalar instruments every tick, plus
+    // a few Ping360 sonar bins refreshed to animate the mechanical sweep.
+    const pose = sensorPose()
+    const sensors = computeSensorReadout(env, pose)
+    for (let i = 0; i < SONAR_BINS_PER_TICK; i++) {
+      sonarHead = (sonarHead + 1) % defaultSonarOptions.bins
+      sonarBins[sonarHead] = sonarBeam(env, pose, sonarHead, defaultSonarOptions)
+    }
+
     // Publish the pool-local readout for the practice widgets.
     practiceSimReadout.value = {
       x: simState.x,
@@ -424,6 +456,8 @@ export const startDemoMode = async (): Promise<void> => {
       heldObstacleId: simState.heldObstacleId,
       thrusterOutputs: simState.thrusterOutputs,
       thrust: simState.thrust,
+      sensors,
+      sonar: { bins: sonarBins, head: sonarHead, maxRangeM: defaultSonarOptions.maxRangeM },
     }
 
     // Convert pool-local meters to lat/lon for the map widget (x = north, y = east).
@@ -458,6 +492,10 @@ export const startDemoMode = async (): Promise<void> => {
     setDataLakeVariableData('VFR_HUD/groundspeed', Math.hypot(simState.surgeVel, simState.swayVel))
     setDataLakeVariableData('BATTERY_STATUS/voltages', battery)
     setDataLakeVariableData('PRACTICE/tether-deployed', tetherDeployed)
+    setDataLakeVariableData('DVL/altitude', sensors.dvl.altitudeM)
+    setDataLakeVariableData('DVL/ground-velocity', Math.hypot(sensors.dvl.vx, sensors.dvl.vy))
+    setDataLakeVariableData('PING/altitude', sensors.altimeterM)
+    setDataLakeVariableData('SONAR/forward-range', sensors.forwardRangeM)
   }, 1000 / SIM_HZ)
 }
 

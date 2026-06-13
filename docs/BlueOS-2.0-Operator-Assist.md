@@ -17,6 +17,17 @@
 | 15 | Consistent 3D hitboxes, Retina/4K rendering, custom GLSL shaders | — |
 | 16 | Flight-sim feel: interpolated 50 Hz sim, analog keys, weight, speed cues, post FX | — |
 | **V2** | **Mission Engine: record · replay · ghost · re-fly · instructor failures · debrief** — see [BlueOS-2.0-Mission-Engine.md](./BlueOS-2.0-Mission-Engine.md) | — |
+| **V2.1** | **Simulated sensor suite: Ping360 scanning sonar, DVL, echosounders** — see [BlueOS-2.0-Sensor-Suite.md](./BlueOS-2.0-Sensor-Suite.md) | — |
+
+## V2.1 — Simulated sensor suite (UWSim-inspired)
+
+What makes a research-grade underwater sim (UWSim/UNav-Sim) more than a pretty
+trainer: it **simulates the sensor payload** and feeds it to the GCS like real
+hardware. Modeled on the BlueRobotics sensors a BlueROV carries — **Ping360
+scanning sonar** (new SonarView polar-scope widget), **DVL** (altitude + ground
+velocity), **Ping echosounder/altimeter**, forward range, pressure→depth — all
+computed from the pool geometry, with the values also pushed to the data lake.
+Full detail in [BlueOS-2.0-Sensor-Suite.md](./BlueOS-2.0-Sensor-Suite.md).
 
 ## V2 — Mission Engine (training system)
 

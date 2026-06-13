@@ -17,6 +17,15 @@
         @dblclick="resetCamera"
       />
       <VideoHudOverlay v-if="widget.options.showHud && cameraMode === 'fp'" />
+      <div v-if="readout.sensors" class="sensor-hud">
+        <span :class="{ warn: readout.sensors.dvl.altitudeM < 0.5 }">
+          ALT {{ readout.sensors.dvl.altitudeM.toFixed(2) }} m
+        </span>
+        <span :class="{ warn: readout.sensors.forwardRangeM < 1.5 }">
+          FWD {{ readout.sensors.forwardRangeM.toFixed(1) }} m
+        </span>
+        <span>SOG {{ Math.hypot(readout.sensors.dvl.vx, readout.sensors.dvl.vy).toFixed(2) }} m/s</span>
+      </div>
       <PracticeMissionPanel />
       <div class="view-controls">
         <button class="view-button" @click="toggleCamera">
@@ -375,5 +384,26 @@ onBeforeUnmount(() => {
 }
 .view-button:hover {
   background-color: rgb(0 0 0 / 65%);
+}
+.sensor-hud {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.8rem;
+  font-family: monospace;
+  font-size: 0.7rem;
+  color: rgb(170 230 235 / 90%);
+  background-color: rgb(0 0 0 / 40%);
+  padding: 2px 10px;
+  border-radius: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 6;
+}
+.sensor-hud .warn {
+  color: rgb(255 120 120);
+  font-weight: 700;
 }
 </style>

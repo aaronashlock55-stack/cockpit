@@ -1,7 +1,12 @@
 import { ref, shallowRef } from 'vue'
 
 import { type PracticePoseFrame } from '@/libs/practice-interp'
-import { type PracticeEnvironment, defaultPracticeEnvironment } from '@/types/practice-environment'
+import { type SensorReadout } from '@/libs/sim-sensors'
+import {
+  type PracticeEnvironment,
+  clonePracticeEnvironment,
+  defaultPracticeEnvironment,
+} from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile, defaultRoverProfile } from '@/types/rover-profile'
 
 /**
@@ -18,7 +23,7 @@ export const activeRoverProfile = ref<RoverProfile>(defaultRoverProfile)
 /** The practice environment (pool, water, ice, tether, obstacles) the sim runs in. */
 // Cloned: the sim mutates obstacle positions (held objects), and the built-in
 // preset constants must stay pristine for later re-selection.
-export const activePracticeEnvironment = ref<PracticeEnvironment>(structuredClone(defaultPracticeEnvironment))
+export const activePracticeEnvironment = ref<PracticeEnvironment>(clonePracticeEnvironment(defaultPracticeEnvironment))
 
 /** Live readout for UI (pool-view widget); written by the demo driver each tick. */
 export interface PracticeSimReadout {
@@ -46,10 +51,29 @@ export interface PracticeSimReadout {
   thrusterOutputs?: number[]
   /** Achieved normalized force per axis [-1, 1]. */
   thrust?: BodyAxes
+  /** Simulated scalar sensors (echosounders, DVL, pressure). */
+  sensors?: SensorReadout
+  /**
+   * Ping360 scanning-sonar state. `bins` is a LIVE shared buffer the sim mutates
+   * in place each tick (read it every frame; do not snapshot/persist it — copy
+   * with `.slice()` first if you ever need a frozen frame).
+   */
+  sonar?: {
+    /** Range per angular bin (bin 0 = forward, clockwise), meters. */
+    bins: number[]
+    /** Index of the bin the sweep most recently refreshed. */
+    head: number
+    /** Maximum sonar range, meters. */
+    maxRangeM: number
+  }
 }
 
-/** Latest sim readout, or null when the sim is not running. */
-export const practiceSimReadout = ref<PracticeSimReadout | null>(null)
+/**
+ * Latest sim readout, or null when the sim is not running. shallowRef (like
+ * {@link practicePoseFrames}): the driver replaces the whole object each tick,
+ * so deep reactivity would only waste cycles proxying the sonar bin array.
+ */
+export const practiceSimReadout = shallowRef<PracticeSimReadout | null>(null)
 
 /**
  * Previous + current timestamped pose snapshots, published every sim tick for
