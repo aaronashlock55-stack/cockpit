@@ -470,3 +470,49 @@ describe('vertical obstacle contact (hitboxes match the 3D view)', () => {
     expect(state.depth).toBeGreaterThan(1.7) // not popped on top
   })
 })
+
+describe('instructor failures (V2 Mission Engine)', () => {
+  /**
+   * Run with constant demand and a constant instructor-failure control.
+   * @param {PracticeEnvironment} env The environment.
+   * @param {BodyAxes} demand Constant demand.
+   * @param {number} steps Step count.
+   * @param {import('@/libs/rover-simulator').SimFailures} failures Failures to inject.
+   * @returns {ReturnType<typeof stepSimulation>} Final state.
+   */
+  const runFail = (
+    env: PracticeEnvironment,
+    demand: BodyAxes,
+    steps: number,
+    failures: import('@/libs/rover-simulator').SimFailures
+  ): ReturnType<typeof stepSimulation> => {
+    let state = initialSimState(env)
+    for (let i = 0; i < steps; i++) {
+      state = stepSimulation(state, blueRov2HeavyProfile, env, demand, 0.04, { failures })
+    }
+    return state
+  }
+
+  it('a thrust brownout makes the rover accelerate more slowly', () => {
+    const env = makeEnv({ pool: { length: 60, width: 10, depth: 3 } })
+    const healthy = run(env, { ...zeroDemand, surge: 1 }, 25)
+    const brownout = runFail(env, { ...zeroDemand, surge: 1 }, 25, { thrustScale: 0.4 })
+    expect(brownout.surgeVel).toBeLessThan(healthy.surgeVel * 0.6)
+  })
+
+  it('disabling all thrusters leaves the rover with no surge authority', () => {
+    const env = makeEnv({ pool: { length: 60, width: 10, depth: 3 } })
+    const profile = blueRov2HeavyProfile
+    const allDead = profile.thrusters.map((_, i) => i)
+    const state = runFail(env, { ...zeroDemand, surge: 1 }, 40, { disabledThrusters: allDead })
+    expect(Math.abs(state.surgeVel)).toBeLessThan(0.05)
+    expect(state.thrusterOutputs.every((o) => o === 0)).toBe(true)
+  })
+
+  it('a ballast leak drives the rover downward even with no heave demand', () => {
+    const env = makeEnv({ pool: { length: 20, width: 10, depth: 5 } })
+    const leaking = runFail(env, zeroDemand, 60, { extraBallastN: 20 })
+    const dry = run(env, zeroDemand, 60)
+    expect(leaking.depth).toBeGreaterThan(dry.depth + 0.2)
+  })
+})

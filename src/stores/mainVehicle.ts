@@ -25,6 +25,7 @@ import { ConnectionManager } from '@/libs/connection/connection-manager'
 import type { Package } from '@/libs/connection/m2r/messages/mavlink2rest'
 import { MavAutopilot, MAVLinkType, MavType } from '@/libs/connection/m2r/messages/mavlink2rest-enum'
 import type { Message } from '@/libs/connection/m2r/messages/mavlink2rest-message'
+import { installVehicleDiveRecorder } from '@/libs/dive-vehicle-recorder'
 import eventTracker from '@/libs/external-telemetry/event-tracking'
 import { availableCockpitActions, registerActionCallback } from '@/libs/joystick/protocols/cockpit-actions'
 import { MavlinkManualControlManager } from '@/libs/joystick/protocols/mavlink-manual-control'
@@ -301,6 +302,10 @@ export const useMainVehicleStore = defineStore('main-vehicle', () => {
       clearReachedMissionItems()
     }
   })
+
+  // V2 Mission Engine black box: record every real armed session as a dive
+  // log so situations can be replayed / re-flown in the practice trainer.
+  installVehicleDiveRecorder({ isArmed, attitude, altitude, coordinates, velocity, currentVehicleName })
 
   const rtcConfiguration = computed(() => {
     const queryWebRtcConfiguration = new URLSearchParams(window.location.search).get('webRTCConfiguration')

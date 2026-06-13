@@ -17,6 +17,7 @@
         @dblclick="resetCamera"
       />
       <VideoHudOverlay v-if="widget.options.showHud && cameraMode === 'fp'" />
+      <PracticeMissionPanel />
       <div class="view-controls">
         <button class="view-button" @click="toggleCamera">
           {{ cameraMode === 'fp' ? '🎥 Chase cam' : '🤿 ROV cam' }}
@@ -43,6 +44,7 @@
 import * as THREE from 'three'
 import { computed, onBeforeUnmount, onMounted, ref, toRefs, watch } from 'vue'
 
+import PracticeMissionPanel from '@/components/PracticeMissionPanel.vue'
 import VideoHudOverlay from '@/components/VideoHudOverlay.vue'
 import {
   activePracticeEnvironment,
@@ -50,6 +52,7 @@ import {
   practicePoseFrames,
   practiceSimReadout,
 } from '@/libs/actions/demo-mode-state'
+import { activeReplay, replayMode } from '@/libs/actions/dive-session-state'
 import { type PracticePost, buildPracticePost } from '@/libs/practice-3d-post'
 import { type PracticeWorld, buildPracticeWorld } from '@/libs/practice-3d-scene'
 import { frameAlpha, interpolatePose } from '@/libs/practice-interp'
@@ -178,7 +181,11 @@ const renderLoop = (): void => {
   if (!r || !frames) return
   // Glassy motion at any refresh rate: blend the sim's prev/curr snapshots by
   // wall-clock alpha instead of snapping to the latest tick.
-  const pose = interpolatePose(frames.prev, frames.curr, frameAlpha(frames.prev.t, frames.curr.t, performance.now()))
+  const livePose = interpolatePose(
+    frames.prev,
+    frames.curr,
+    frameAlpha(frames.prev.t, frames.curr.t, performance.now())
+  )
   if (frames.curr.t !== lastFrameT) {
     const fdt = Math.max((frames.curr.t - frames.prev.t) / 1000, 1e-3)
     accel.surge = (frames.curr.surgeVel - frames.prev.surgeVel) / fdt
@@ -186,16 +193,46 @@ const renderLoop = (): void => {
     accel.heave = (frames.curr.heaveVel - frames.prev.heaveVel) / fdt
     lastFrameT = frames.curr.t
   }
+
+  // Replay overlay (V2 Mission Engine): in 'watch' mode the displayed vehicle
+  // IS the recording; in 'ghost' mode the recording flies alongside as a
+  // translucent ghost while the live sim drives the main rover.
+  const replay = activeReplay.value
+  const replayFrame = replay ? replay.frameNow() : null
+  const watching = replayFrame !== null && replayMode.value === 'watch'
+  const pose = watching
+    ? {
+        x: replayFrame.x ?? livePose.x,
+        y: replayFrame.y ?? livePose.y,
+        depth: replayFrame.depth,
+        heading: replayFrame.heading,
+        pitch: replayFrame.pitch,
+        roll: replayFrame.roll,
+      }
+    : livePose
+  const ghostPose =
+    replayFrame !== null && replayMode.value === 'ghost'
+      ? {
+          x: replayFrame.x ?? livePose.x,
+          y: replayFrame.y ?? livePose.y,
+          depth: replayFrame.depth,
+          heading: replayFrame.heading,
+          pitch: replayFrame.pitch,
+          roll: replayFrame.roll,
+        }
+      : null
+
   world.update(
     { x: pose.x, y: pose.y, depth: pose.depth, heading: pose.heading, pitch: pose.pitch, roll: pose.roll },
     {
-      gripper: r.gripper ?? 0,
+      gripper: watching ? 0 : r.gripper ?? 0,
       cameraMode: cameraMode.value,
-      speed: pose.speed,
-      tetherPath: r.tetherPath,
+      speed: watching ? replayFrame?.speed ?? 0 : livePose.speed,
+      tetherPath: watching ? undefined : r.tetherPath,
       cameraAdjust: cameraAdjust.value,
-      accel,
-      thrusterOutputs: r.thrusterOutputs,
+      accel: watching ? { surge: 0, sway: 0, heave: 0 } : accel,
+      thrusterOutputs: watching ? replayFrame?.thrusterOutputs : r.thrusterOutputs,
+      ghostPose,
     }
   )
   if (post) post.render()

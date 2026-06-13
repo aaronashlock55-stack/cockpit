@@ -66,6 +66,8 @@ export interface WorldUpdateOptions {
   accel?: BodyAccel
   /** Spooled per-thruster outputs [-1, 1], for prop-wash visuals. */
   thrusterOutputs?: number[]
+  /** Replay ghost pose — shows a translucent second rover there (null hides it). */
+  ghostPose?: CameraPose | null
   /** Frame dt override in seconds (tests; defaults to the internal clock). */
   dt?: number
 }
@@ -283,6 +285,25 @@ export const buildPracticeWorld = (
   const propWash = buildPropWash(profile)
   rover.group.add(propWash.object)
 
+  // Replay ghost: a second, translucent copy of the rover that flies a
+  // recorded run (race it, or watch a previous/real dive alongside).
+  const ghost = buildRoverModel(profile)
+  ghost.group.name = 'ghost-rover'
+  ghost.group.visible = false
+  ghost.group.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    if (!mesh.isMesh) return
+    mesh.castShadow = false
+    mesh.receiveShadow = false
+    const ghostMaterial = (mesh.material as THREE.MeshStandardMaterial).clone()
+    ghostMaterial.transparent = true
+    ghostMaterial.opacity = 0.35
+    ghostMaterial.color.lerp(new THREE.Color(0x55ddff), 0.55)
+    ghostMaterial.depthWrite = false
+    mesh.material = ghostMaterial
+  })
+  scene.add(ghost.group)
+
   // Tether: a real rope (tube) that sags in proportion to slack, straightens
   // and turns red as it runs out, and routes through the ice launch hole.
   // Always built; visibility follows env.tether.enabled live (no rebuild).
@@ -373,6 +394,18 @@ export const buildPracticeWorld = (
     rover.setClawClosure(opts.gripper ?? 0)
     rover.spinProps((2 + (opts.speed ?? 0) * 18) * delta * 6)
     propWash.update(delta, opts.thrusterOutputs ?? [])
+
+    // Replay ghost follows its recorded pose when one is supplied.
+    const ghostPose = opts.ghostPose
+    ghost.group.visible = !!ghostPose
+    if (ghostPose) {
+      ghost.group.position.set(ghostPose.x, -ghostPose.depth, ghostPose.y)
+      ghost.group.rotation.set(0, 0, 0)
+      ghost.group.rotateY(-Math.PI / 2 - ghostPose.heading)
+      ghost.group.rotateX(ghostPose.pitch)
+      ghost.group.rotateZ(ghostPose.roll)
+      ghost.spinProps(6 * delta)
+    }
 
     // World velocity from pose deltas, for the near-camera speed motes.
     if (Number.isFinite(lastPos.x) && delta > 1e-4) {

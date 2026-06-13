@@ -73,10 +73,22 @@ export interface SimState {
   collidedWith?: string
 }
 
+/** Instructor-injected failures applied this step (V2 Mission Engine). */
+export interface SimFailures {
+  /** Indices of dead thrusters (produce no output). */
+  disabledThrusters?: number[]
+  /** Global thrust multiplier (e.g. 0.5 = brownout; 1 = healthy). */
+  thrustScale?: number
+  /** Extra downward ballast force, N (simulates a leak / flooded enclosure). */
+  extraBallastN?: number
+}
+
 /** Optional per-step controls beyond the axis demand. */
 export interface SimControls {
   /** Commanded claw state: true = close/grab, false = open/release. */
   gripperClosed?: boolean
+  /** Instructor failures in effect this step. */
+  failures?: SimFailures
 }
 
 const zeroAxes = (): BodyAxes => ({ surge: 0, sway: 0, heave: 0, yaw: 0, pitch: 0, roll: 0 })
@@ -212,6 +224,13 @@ export const stepSimulation = (
   targets.forEach((target, i) => {
     outputs[i] += (target - outputs[i]) * spool
   })
+  // Instructor failures: dead thrusters produce nothing (and show stopped).
+  const failures = controls.failures
+  if (failures?.disabledThrusters?.length) {
+    for (const dead of failures.disabledThrusters) {
+      if (dead >= 0 && dead < outputs.length) outputs[dead] = 0
+    }
+  }
   next.thrusterOutputs = outputs
 
   // Forces (N) and torques (N·m) from the thrusters. Translation treats the mix
@@ -220,8 +239,9 @@ export const stepSimulation = (
   const L = Math.max(profile.dimensions.length, 0.15)
   const W = Math.max(profile.dimensions.width, 0.15)
   let [fSurge, fSway, fHeave, tYaw, tPitch, tRoll] = [0, 0, 0, 0, 0, 0]
+  const thrusterN = model.thrusterN * clamp(failures?.thrustScale ?? 1, 0, 1)
   profile.thrusters.forEach((t, i) => {
-    const force = outputs[i] * model.thrusterN
+    const force = outputs[i] * thrusterN
     const [px, py] = t.position ?? [0, 0, 0]
     fSurge += force * t.contribution.surge
     fSway += force * t.contribution.sway
@@ -239,7 +259,9 @@ export const stepSimulation = (
 
   // Hydrostatics: world-frame net buoyancy resolved into body axes, so a
   // pitched vehicle feels it partly along surge — like the real thing.
-  const [bSurge, bSway, bHeave] = worldToBody(0, 0, model.buoyancyDownN, state.roll, state.pitch, state.heading)
+  // Instructor ballast (a "leak") adds straight-down force.
+  const downForceN = model.buoyancyDownN + Math.max(0, failures?.extraBallastN ?? 0)
+  const [bSurge, bSway, bHeave] = worldToBody(0, 0, downForceN, state.roll, state.pitch, state.heading)
 
   // Water motion (current / wave pool / jet stream): drag acts on velocity
   // RELATIVE to the water, so a current pushes the rover until it drifts along.

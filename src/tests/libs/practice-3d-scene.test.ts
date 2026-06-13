@@ -232,4 +232,21 @@ describe('buildPracticeWorld', () => {
     expect(float!.position.y).toBeCloseTo(-(obstacle.position[2] + obstacle.size[2] / 2))
     world.dispose()
   })
+
+  it('hides the replay ghost by default and shows it at the ghost pose', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    const ghost = world.scene.children.find((c) => c.name === 'ghost-rover')!
+    expect(ghost).toBeDefined()
+    world.update({ x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 })
+    expect(ghost.visible).toBe(false) // no ghostPose -> hidden
+    world.update(
+      { x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 },
+      { ghostPose: { x: 8, y: 6, depth: 2, heading: Math.PI / 2, pitch: 0, roll: 0 } }
+    )
+    expect(ghost.visible).toBe(true)
+    expect(ghost.position.x).toBeCloseTo(8)
+    expect(ghost.position.y).toBeCloseTo(-2) // depth maps to -Y
+    expect(ghost.position.z).toBeCloseTo(6)
+    world.dispose()
+  })
 })

@@ -16,6 +16,17 @@
 | 14 | Adjustable camera, water currents (wave pool / jet stream), graphics pass | — |
 | 15 | Consistent 3D hitboxes, Retina/4K rendering, custom GLSL shaders | — |
 | 16 | Flight-sim feel: interpolated 50 Hz sim, analog keys, weight, speed cues, post FX | — |
+| **V2** | **Mission Engine: record · replay · ghost · re-fly · instructor failures · debrief** — see [BlueOS-2.0-Mission-Engine.md](./BlueOS-2.0-Mission-Engine.md) | — |
+
+## V2 — Mission Engine (training system)
+
+The jump from a 3D trainer to a CAE-style training **system**: every practice
+run and every real armed dive is recorded ("black box"); any run can be
+**replayed**, **raced as a ghost**, scored in a **debrief**, and — the headline —
+**re-flown from any moment** (reposition + unfreeze). An **instructor panel**
+injects live failures (dead thrusters, thrust brownout, ballast leak, freeze).
+Full architecture and module map in
+[BlueOS-2.0-Mission-Engine.md](./BlueOS-2.0-Mission-Engine.md).
 
 ## Phase 16 — Flight-sim feel overhaul
 

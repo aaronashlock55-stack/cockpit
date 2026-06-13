@@ -1,9 +1,11 @@
 import { unit } from 'mathjs'
 
+import { type ActiveRecording, saveDiveLog, startDiveRecording } from '@/libs/dive-recorder'
 import { applyExpo, stepDemandEnvelope } from '@/libs/input-shaping'
 import { type PracticePoseFrame } from '@/libs/practice-interp'
 import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { tetherFullPath } from '@/libs/rover-tether'
+import { type DiveLogFrame } from '@/types/dive-log'
 // NOTE: the vehicle store and joystick manager are loaded lazily inside
 // startDemoMode(). Importing them statically from here (which the development
 // store pulls in at boot) changes the production bundle's module evaluation
@@ -19,6 +21,14 @@ import {
   practicePoseFrames,
   practiceSimReadout,
 } from './demo-mode-state'
+import {
+  activeReplay,
+  diveLogsVersion,
+  instructorState,
+  lastDiveSummary,
+  replayMode,
+  resetInstructorState,
+} from './dive-session-state'
 
 /**
  * Practice / Demo mode driver.
@@ -57,6 +67,82 @@ let elapsed = 0
 // Hoop-pass feedback: keep the last cleanly-passed hoop on screen briefly.
 let recentPassName: string | undefined
 let recentPassUntil = 0
+
+// V2 Mission Engine: every practice run is recorded as a dive log ("black
+// box") so it can be replayed, raced as a ghost, scored, and re-flown.
+const RECORD_EVERY = 5 // sim ticks per recorded frame (50 Hz -> 10 Hz)
+const MIN_SAVE_FRAMES = 30 // don't persist runs shorter than ~3 s
+let recording: ActiveRecording | null = null
+let recordingStartElapsed = 0
+let frozenElapsed = 0 // total seconds spent frozen, subtracted from the run timeline
+let lastCollidedWith: string | undefined
+let lastHeldId: string | undefined
+
+const beginPracticeRecording = (): void => {
+  const env = activePracticeEnvironment.value
+  recording = startDiveRecording({
+    source: 'practice',
+    rateHz: SIM_HZ / RECORD_EVERY,
+    profileName: activeRoverProfile.value.name,
+    environmentName: env.name,
+    environment: structuredClone(env),
+  })
+  recordingStartElapsed = elapsed
+  frozenElapsed = 0
+  lastCollidedWith = undefined
+  lastHeldId = undefined
+}
+
+const persistRecording = (name?: string): void => {
+  if (!recording || recording.frameCount() < MIN_SAVE_FRAMES) return
+  const log = recording.finish(name)
+  lastDiveSummary.value = { ...log.metrics!, name: log.name }
+  saveDiveLog(log)
+    .then(() => diveLogsVersion.value++)
+    .catch((error) => console.error('Could not save dive log:', error))
+}
+
+/**
+ * Cut the current practice recording into a saved run and start a fresh one
+ * (the mission panel's "save run" button).
+ * @param {string} name Optional display name for the saved run.
+ * @returns {void}
+ */
+export const finishPracticeRun = (name?: string): void => {
+  persistRecording(name)
+  beginPracticeRecording()
+}
+
+/**
+ * Teleport the simulated rover into a recorded situation — the full-flight-sim
+ * "reposition and unfreeze" used for re-flying a moment from a previous run.
+ * Velocities/rates reset so the pilot takes over from rest; the tether and
+ * claw release so the state is always physically consistent.
+ * @param {DiveLogFrame} frame The recorded frame to resume from.
+ * @returns {void}
+ */
+export const repositionPracticeSim = (frame: DiveLogFrame): void => {
+  simState = {
+    ...simState,
+    x: frame.x ?? simState.x,
+    y: frame.y ?? simState.y,
+    depth: Math.max(0, frame.depth),
+    heading: frame.heading,
+    pitch: frame.pitch,
+    roll: frame.roll,
+    surgeVel: 0,
+    swayVel: 0,
+    heaveVel: 0,
+    yawRate: 0,
+    pitchRate: 0,
+    rollRate: 0,
+    thrusterOutputs: [],
+    tetherWraps: [],
+    ringSides: {},
+    heldObstacleId: undefined,
+    collidedWith: undefined,
+  }
+}
 
 // Map anchor for converting pool-local meters to lat/lon (arbitrary but valid).
 const ORIGIN_LAT = 47.3977
@@ -217,7 +303,13 @@ export const startDemoMode = async (): Promise<void> => {
   elapsed = 0
   shapedKeys = zeroAxes()
   hasHadManualInput = false
+  // Clear any replay/freeze left over from a prior session, else the new sim
+  // would start frozen (dead on arrival) ticking a stale replay.
+  activeReplay.value = null
+  replayMode.value = null
+  resetInstructorState()
   isDemoModeActive.value = true
+  beginPracticeRecording()
 
   // Keyboard fallback controls while practicing.
   window.addEventListener('keydown', onKeyDown)
@@ -235,9 +327,20 @@ export const startDemoMode = async (): Promise<void> => {
     elapsed += dt
     tick++
     const env = activePracticeEnvironment.value
-    simState = stepSimulation(simState, activeRoverProfile.value, env, currentDemand(), dt, {
-      gripperClosed: gripperClosedTarget.value,
-    })
+
+    // The replay clock advances on the sim's heartbeat (even while frozen, so
+    // a frozen pilot can still watch a recording).
+    activeReplay.value?.tick(dt)
+
+    // Instructor freeze: the world holds; controls are ignored.
+    if (instructorState.value.frozen) {
+      frozenElapsed += dt
+    } else {
+      simState = stepSimulation(simState, activeRoverProfile.value, env, currentDemand(), dt, {
+        gripperClosed: gripperClosedTarget.value,
+        failures: instructorState.value,
+      })
+    }
 
     // Pose frames publish EVERY tick (50 Hz): the 3D view interpolates between
     // prev and curr so motion is glassy at any display refresh rate.
@@ -260,6 +363,38 @@ export const startDemoMode = async (): Promise<void> => {
     if (simState.justPassed) {
       recentPassName = simState.justPassed
       recentPassUntil = elapsed + 3
+    }
+
+    // Black box: 10 Hz frames + edge-triggered events into the dive log. Frozen
+    // ticks (instructor freeze, or watching a replay) are NOT recorded — they'd
+    // append a stationary tail to the run and inflate its duration.
+    if (recording && !instructorState.value.frozen) {
+      const recT = elapsed - recordingStartElapsed - frozenElapsed
+      if (tick % RECORD_EVERY === 0) {
+        recording.addFrame({
+          t: recT,
+          x: simState.x,
+          y: simState.y,
+          depth: simState.depth,
+          heading: simState.heading,
+          pitch: simState.pitch,
+          roll: simState.roll,
+          speed: frame.speed,
+          thrusterOutputs: simState.thrusterOutputs,
+        })
+      }
+      if (simState.collidedWith && simState.collidedWith !== lastCollidedWith) {
+        const isSnag = simState.collidedWith.startsWith('tether')
+        recording.addEvent(recT, isSnag ? 'snag' : 'collision', simState.collidedWith)
+      }
+      lastCollidedWith = simState.collidedWith
+      if (simState.justPassed) recording.addEvent(recT, 'pass', simState.justPassed)
+      if (simState.heldObstacleId && simState.heldObstacleId !== lastHeldId) {
+        recording.addEvent(recT, 'grab', simState.heldObstacleId)
+      } else if (!simState.heldObstacleId && lastHeldId) {
+        recording.addEvent(recT, 'release', lastHeldId)
+      }
+      lastHeldId = simState.heldObstacleId
     }
 
     // Everything below (readout + vehicle store + data lake) stays at 25 Hz.
@@ -341,6 +476,8 @@ export const resetPracticeSim = (): void => {
 export const stopDemoMode = (): void => {
   if (loopTimer) clearInterval(loopTimer)
   loopTimer = undefined
+  persistRecording()
+  recording = null
   isDemoModeActive.value = false
   practiceSimReadout.value = null
   practicePoseFrames.value = null
