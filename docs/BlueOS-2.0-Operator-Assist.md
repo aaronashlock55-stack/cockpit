@@ -15,6 +15,49 @@
 | 13 | Rigid-body camera (camera mounted on the rover) + tether snag physics | — |
 | 14 | Adjustable camera, water currents (wave pool / jet stream), graphics pass | — |
 | 15 | Consistent 3D hitboxes, Retina/4K rendering, custom GLSL shaders | — |
+| 16 | Flight-sim feel: interpolated 50 Hz sim, analog keys, weight, speed cues, post FX | — |
+
+## Phase 16 — Flight-sim feel overhaul
+
+Built after pilot feedback ("choppy, floaty, no weight — like a game, not a
+learning sim") using the techniques real flight/FPV sims use:
+
+**Glassy motion.** The sim now steps at **50 Hz** and publishes timestamped
+snapshots; the 3D view **interpolates** between them (the classic fix-your-
+timestep pattern), so motion is smooth at any display refresh rate — the old
+25 Hz snap-stutter is gone.
+
+**Analog keys + expo sticks.** WASD ramps like a real stick (full thrust over
+~0.35 s, bleeds off over ~0.2 s when released) instead of snapping to ±1;
+gamepad sticks get an FPV-style expo curve for fine center control.
+
+**Weight.** Near-critical righting damping (settles decisively, no wobble),
+stronger low-speed drag (coasting bleeds off; counter-thrust visibly matters —
+a test enforces braking stops ≫ faster than coasting), and **camera
+micro-inertia**: acceleration dips the first-person view ~1° and tucks the
+camera back ~2 cm, the head-inertia cue that telegraphs mass.
+
+**No more ghost pilot.** The idle auto-patrol only runs until your first
+manual input — after that the rover holds position when you let go.
+
+**Camera.** Chase rig is spring-damped frame-rate-independently and the FOV
+eases wider with speed (chase also pulls back slightly) — the standard
+sense-of-speed kit.
+
+**Sense of speed.** A near-camera mote cloud streams past the lens opposite
+your velocity (invisible when parked), and **prop wash** bubbles burst behind
+whichever thrusters are working.
+
+**Look.** Worn 1024 px pool tiles (per-tile tint jitter, grout variation,
+stains), **lane lines with T markers**, a dark **waterline band**, darker
+below-waterline walls; props dressed (hazard-striped gates/hoops, labeled
+canisters, scuffed crates). **Post-processing**: subtle bloom + vignette/
+underwater rim tint via EffectComposer (MSAA target, pixel ratio capped 1.75).
+
+**For developers:** `practice-interp.ts` (pose frames, lerpAngle,
+smoothTowards), `input-shaping.ts` (envelopes, expo), `practice-3d-textures.ts`
+(tiles/stripes/pool dressing), `practice-3d-post.ts` (widget-only bloom chain),
+plus demo-mode/scene/hydro updates. 90 practice tests (105 total).
 
 ## Phase 15 — Hitboxes, high-DPI & custom shaders
 
