@@ -4,7 +4,7 @@ import { type ActiveRecording, saveDiveLog, startDiveRecording } from '@/libs/di
 import { applyExpo, stepDemandEnvelope } from '@/libs/input-shaping'
 import { type PracticePoseFrame } from '@/libs/practice-interp'
 import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
-import { tetherFullPath } from '@/libs/rover-tether'
+import { tetherFullPath, tetherSnaggedObstacleIds } from '@/libs/rover-tether'
 import { type SensorPose, computeSensorReadout, defaultSonarOptions, sonarBeam } from '@/libs/sim-sensors'
 import { type DiveLogFrame } from '@/types/dive-log'
 import { clonePracticeEnvironment } from '@/types/practice-environment'
@@ -139,7 +139,8 @@ export const repositionPracticeSim = (frame: DiveLogFrame): void => {
     pitchRate: 0,
     rollRate: 0,
     thrusterOutputs: [],
-    tetherWraps: [],
+    tetherNodes: [], // rebuilt at the new pose on the next tether step
+    tetherDeployed: 0,
     ringSides: {},
     heldObstacleId: undefined,
     collidedWith: undefined,
@@ -446,10 +447,9 @@ export const startDemoMode = async (): Promise<void> => {
       heading: simState.heading,
       tetherDeployed,
       tetherPath: env.tether.enabled
-        ? tetherFullPath(simState.tetherWraps, { x: simState.x, y: simState.y, depth: simState.depth }, env).map(
-            (p) => [p.x, p.y, p.depth] as [number, number, number]
-          )
+        ? tetherFullPath(simState, env).map((p) => [p.x, p.y, p.depth] as [number, number, number])
         : undefined,
+      tetherSnagged: env.tether.enabled ? tetherSnaggedObstacleIds(simState, env) : undefined,
       collidedWith: simState.collidedWith,
       recentPass: elapsed < recentPassUntil ? recentPassName : undefined,
       gripper: simState.gripper,

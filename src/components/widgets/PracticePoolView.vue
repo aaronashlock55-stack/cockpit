@@ -33,6 +33,7 @@
             :cy="obstacle.position[1]"
             :r="Math.max(obstacle.size[0] / 2, 0.15)"
             class="obstacle"
+            :class="{ snagged: snaggedIds.has(obstacle.id) }"
             :style="{ fill: obstacle.color ?? '#ffd24a' }"
           />
           <rect
@@ -42,6 +43,7 @@
             :width="obstacle.size[0]"
             :height="obstacle.size[1]"
             class="obstacle"
+            :class="{ snagged: snaggedIds.has(obstacle.id) }"
             :style="{ fill: obstacle.color ?? '#ffd24a' }"
           />
         </template>
@@ -57,7 +59,23 @@
         <g :transform="`translate(${readout.x}, ${readout.y}) rotate(${(readout.heading * 180) / Math.PI})`">
           <polygon points="0.6,0 -0.4,0.35 -0.4,-0.35" class="rover" :class="{ bumped: !!readout.collidedWith }" />
         </g>
+        <!-- Scale bar (a real-world ruler that scales with the map), bottom-left.
+             Its numeric label is an HTML overlay so it stays readable. -->
+        <g :transform="`translate(0.6, ${env.pool.width - 0.6})`" class="legend">
+          <line x1="0" y1="0" :x2="scaleM" y2="0" class="scale-bar" />
+          <line x1="0" y1="-0.12" x2="0" y2="0.12" class="scale-bar" />
+          <line :x1="scaleM" y1="-0.12" :x2="scaleM" y2="0.12" class="scale-bar" />
+        </g>
+        <!-- Heading reference arrow: pool +x (heading 0 / "north" on the map). -->
+        <g :transform="`translate(${env.pool.length - 1.4}, 1.1)`" class="legend">
+          <line x1="-0.5" y1="0" x2="0.7" y2="0" class="north-arrow" />
+          <polygon points="0.9,0 0.5,-0.18 0.5,0.18" class="north-head" />
+        </g>
       </svg>
+      <div class="map-legend">
+        <span>⤢ {{ scaleM }} m</span>
+        <span>N → +x</span>
+      </div>
       <div class="status-bar">
         <span>{{ env.name }}</span>
         <span>depth {{ readout.depth.toFixed(1) }} m / {{ env.pool.depth }} m</span>
@@ -115,6 +133,16 @@ const tetherPoints = computed(() => {
     .map((p) => `${p.x},${p.y}`)
     .join(' ')
 })
+
+// Obstacles the tether is currently caught on (highlighted on the map).
+const snaggedIds = computed(() => new Set(readout.value?.tetherSnagged ?? []))
+
+// A round scale-bar length that fits ~a quarter of the pool length.
+const scaleM = computed(() => {
+  const target = env.value.pool.length / 4
+  const steps = [0.5, 1, 2, 5, 10, 20]
+  return steps.reduce((best, s) => (Math.abs(s - target) < Math.abs(best - target) ? s : best), steps[0])
+})
 </script>
 
 <style scoped>
@@ -162,18 +190,46 @@ const tetherPoints = computed(() => {
   stroke: rgb(0 0 0 / 40%);
   stroke-width: 0.05;
 }
+.obstacle.snagged {
+  stroke: rgb(255 120 70);
+  stroke-width: 0.16;
+}
 .hoop {
   stroke-width: 0.14;
   stroke-linecap: round;
 }
 .tether {
-  stroke: rgb(255 255 100 / 70%);
+  stroke: rgb(255 230 100 / 80%);
   stroke-width: 0.1;
-  stroke-dasharray: 0.4 0.25;
+  stroke-linejoin: round;
 }
 .tether.taut {
   stroke: rgb(255 80 80);
-  stroke-dasharray: none;
+}
+.legend {
+  pointer-events: none;
+}
+.scale-bar,
+.north-arrow {
+  stroke: rgb(200 230 240 / 75%);
+  stroke-width: 0.06;
+}
+.north-head {
+  fill: rgb(200 230 240 / 85%);
+}
+.map-legend {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  display: flex;
+  gap: 0.7rem;
+  font-family: monospace;
+  font-size: 0.64rem;
+  color: rgb(200 230 240 / 85%);
+  background-color: rgb(0 0 0 / 35%);
+  padding: 2px 8px;
+  border-radius: 8px;
+  pointer-events: none;
 }
 .rover {
   fill: rgb(94 192 255);

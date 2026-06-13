@@ -1,5 +1,5 @@
 import { axisKeys, backMix, bodyToWorld, footprintRadius, hydroModel, worldToBody } from '@/libs/rover-hydro'
-import { type TetherWrap, applyTetherPhysics, tetherDeployedLength } from '@/libs/rover-tether'
+import { type Point3, type TetherNode, applyTetherPhysics, tetherDeployedLength } from '@/libs/rover-tether'
 import { type PracticeEnvironment, flowVelocity, waterDensity } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile } from '@/types/rover-profile'
 
@@ -61,8 +61,12 @@ export interface SimState {
   ringSides: Record<string, number>
   /** Name of the hoop cleanly passed through on this step, if any. */
   justPassed?: string
-  /** Points where the tether is currently snagged/bending around obstacles. */
-  tetherWraps: TetherWrap[]
+  /** The tether rope nodes (surface-anchor side first, rover-rear side last). */
+  tetherNodes: TetherNode[]
+  /** Paid-out cable length on the dynamic span (hole/attach → rover), meters. */
+  tetherDeployed: number
+  /** Rover-rear attach point cached by the tether step (renders the rope into the hull). */
+  roverEndCache?: Point3
   /** Accumulated sim time, seconds (drives time-varying water motion like waves). */
   time: number
   /** Claw closure, 0 = open .. 1 = closed (animated toward the commanded state). */
@@ -115,7 +119,8 @@ export const initialSimState = (env: PracticeEnvironment): SimState => ({
   thrusterOutputs: [],
   thrust: zeroAxes(),
   ringSides: {},
-  tetherWraps: [],
+  tetherNodes: [],
+  tetherDeployed: 0,
   time: 0,
   gripper: 0,
 })
@@ -162,6 +167,21 @@ export const gripperPoint = (state: SimState, profile: RoverProfile): PoolPoint 
   const drop = Math.max(profile.dimensions.height, 0.1) * 0.28 // claw hangs below center (see practice-3d-rover)
   const [dx, dy, dDown] = bodyToWorld(reach, 0, drop, state.roll, state.pitch, state.heading)
   return { x: state.x + dx, y: state.y + dy, depth: state.depth + dDown }
+}
+
+/**
+ * The tether's attach point on the REAR of the rover (body-fixed at the top-rear
+ * strain-relief boss, rotated through the full attitude), so the cable leaves
+ * the back of the hull instead of clipping through its center.
+ * @param {SimState} state Current state.
+ * @param {RoverProfile} profile Rover profile (sets the rear offset).
+ * @returns {Point3} The rear attach point in pool coordinates.
+ */
+export const tetherAttachPoint = (state: SimState, profile: RoverProfile): Point3 => {
+  const back = -(Math.max(profile.dimensions.length, 0.15) / 2 + 0.04) // behind the hull
+  const up = -Math.max(profile.dimensions.height, 0.1) * 0.32 // top-rear boss (negative depth = up)
+  const [dx, dy, dDown] = bodyToWorld(back, 0, up, state.roll, state.pitch, state.heading)
+  return { x: state.x + dx, y: state.y + dy, depth: Math.max(0, state.depth + dDown) }
 }
 
 /**
@@ -501,8 +521,9 @@ export const stepSimulation = (
     }
   }
 
-  // Tether: snag on obstacles + enforce the hard length limit (see rover-tether).
-  applyTetherPhysics(next, env)
+  // Tether: a real rope attached at the rover's REAR that drapes, wraps/tangles
+  // on obstacles, and pulls the rover up short when its cable runs out.
+  applyTetherPhysics(next, env, tetherAttachPoint(next, profile), dt)
 
   return next
 }

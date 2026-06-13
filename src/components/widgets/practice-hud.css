@@ -1,0 +1,19 @@
+/**
+ * Shared visual language for the Practice/Mission widgets (3D view, sonar, pool
+ * map, mission panel). Custom properties cascade globally from :root, so every
+ * practice widget reads from the same palette/typography and stays consistent.
+ */
+:root {
+  --hud-bg: rgb(6 20 28 / 55%);
+  --hud-bg-strong: rgb(6 20 28 / 78%);
+  --hud-border: rgb(150 220 235 / 22%);
+  --hud-radius: 9px;
+  --hud-font: 'Roboto Mono', ui-monospace, monospace;
+  --hud-fg: rgb(210 235 240 / 92%);
+  --hud-fg-dim: rgb(170 205 215 / 70%);
+  --hud-accent: rgb(120 215 235);
+  --hud-ok: rgb(95 230 150);
+  --hud-warn: rgb(255 120 120);
+  --hud-font-size: 0.72rem;
+  --hud-font-size-sm: 0.64rem;
+}

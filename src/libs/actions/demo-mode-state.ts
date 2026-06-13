@@ -37,8 +37,10 @@ export interface PracticeSimReadout {
   heading: number
   /** Deployed tether length in meters. */
   tetherDeployed: number
-  /** Full tether path (attach → ice hole → snag points → rover) as [x, y, depth] triples. */
+  /** Full tether path (attach → ice hole → rope nodes → rover rear) as [x, y, depth] triples. */
   tetherPath?: [number, number, number][]
+  /** Ids of obstacles the tether is currently caught on (for highlighting them). */
+  tetherSnagged?: string[]
   /** Whatever the rover is currently touching, if anything. */
   collidedWith?: string
   /** Name of a hoop cleanly passed through in the last few seconds, if any. */

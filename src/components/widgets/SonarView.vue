@@ -21,6 +21,10 @@
         >
       </div>
       <div class="title">Ping360 · scanning sonar</div>
+      <div v-if="nearest" class="nearest" :class="{ warn: nearest.range < 1.5 }">
+        nearest <b>{{ nearest.range.toFixed(1) }}</b> m @ <b>{{ nearest.bearing }}</b
+        >°
+      </div>
     </template>
   </div>
 </template>
@@ -41,6 +45,30 @@ const groundSpeed = computed(() => {
   return dvl ? Math.hypot(dvl.vx, dvl.vy) : 0
 })
 const depth = computed(() => practiceSimReadout.value?.depth ?? 0)
+
+/** The closest sonar return for the on-screen callout. */
+interface NearestContact {
+  /** Range to the nearest return, meters. */
+  range: number
+  /** Vehicle-relative bearing, degrees (0 = ahead, clockwise). */
+  bearing: number
+}
+
+// Closest sonar return: range + vehicle-relative bearing (0 = ahead, clockwise).
+const nearest = computed<NearestContact | null>(() => {
+  const sonar = practiceSimReadout.value?.sonar
+  if (!sonar) return null
+  let best = sonar.maxRangeM
+  let bestBin = -1
+  for (let i = 0; i < sonar.bins.length; i++) {
+    if (sonar.bins[i] < best) {
+      best = sonar.bins[i]
+      bestBin = i
+    }
+  }
+  if (bestBin < 0 || best >= sonar.maxRangeM) return null
+  return { range: best, bearing: Math.round((bestBin / sonar.bins.length) * 360) }
+})
 
 let animationFrame: number | undefined
 
@@ -187,9 +215,9 @@ onBeforeUnmount(() => {
   transform: translateX(-50%);
   display: flex;
   gap: 0.7rem;
-  font-family: monospace;
-  font-size: 0.68rem;
-  color: rgb(170 230 235);
+  font-family: var(--hud-font);
+  font-size: var(--hud-font-size-sm);
+  color: var(--hud-fg);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -197,15 +225,33 @@ onBeforeUnmount(() => {
   color: #fff;
 }
 .readout.warn b {
-  color: rgb(255 120 120);
+  color: var(--hud-warn);
 }
 .title {
   position: absolute;
   top: 5px;
   left: 8px;
-  font-family: monospace;
-  font-size: 0.62rem;
-  color: rgb(120 200 210 / 80%);
+  font-family: var(--hud-font);
+  font-size: var(--hud-font-size-sm);
+  color: var(--hud-accent);
+  opacity: 0.8;
   pointer-events: none;
+}
+.nearest {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  font-family: var(--hud-font);
+  font-size: var(--hud-font-size-sm);
+  color: var(--hud-fg-dim);
+  pointer-events: none;
+}
+.nearest b {
+  color: var(--hud-fg);
+}
+.nearest.warn,
+.nearest.warn b {
+  color: var(--hud-warn);
+  font-weight: 700;
 }
 </style>

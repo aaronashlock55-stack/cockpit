@@ -2,43 +2,52 @@ import { bodyToWorld, worldToBody } from '@/libs/rover-hydro'
 import { type PracticeEnvironment, type PracticeObstacle } from '@/types/practice-environment'
 
 /**
- * Tether model for the practice simulator. The cable is a taut inextensible
- * line from the surface attach point to the rover. It:
- * - routes through the ice launch hole when there is an ice sheet,
- * - SNAGS on obstacles: when the free run from the last anchor to the rover
- *   crosses a prop/post, a wrap point is pinned at that obstacle's edge and the
- *   cable bends around it (and unwinds when the rover comes back),
- * - enforces a hard length limit measured along the whole wrapped path, killing
- *   the rover's outward momentum when it snaps taut.
+ * Tether model for the practice simulator — a real 3D rope, not a rubber band.
  *
- * Wrap handling is a plan-view "rubber band around pegs" approximation: corners
- * sit on the outside of each bend and slide around the peg as the rover moves,
- * which is good enough to make tether management a real part of piloting.
+ * The cable is a chain of point masses (Verlet integration + position-based
+ * distance constraints) pinned at the surface attach point (routed through the
+ * ice launch hole when present) and at the REAR of the rover, so the rope leaves
+ * the back of the hull and never clips through it. Each node:
+ * - sags under a gentle catenary load and is damped by the water,
+ * - collides with posts/props (capsules), boxes, the pool walls and floor, and
+ *   STICKS via contact friction — so the cable genuinely wraps, snags and
+ *   TANGLES around obstacles and stays caught when you back off,
+ * - shares an inextensible length: when the wrapped path consumes more cable
+ *   than is paid out, the rope pulls the rover up short (and kills its outward
+ *   momentum), and the winch pays out smoothly until it runs out.
+ *
+ * Pure + deterministic (no RNG in the step) so it is unit-testable.
  */
 
-/** A point where the tether is pinned against an obstacle as it bends around it. */
-export interface TetherWrap {
-  /** Pool-local x of the bend point, meters. */
+/** A point in pool-local coordinates. */
+export interface Point3 {
+  /** Pool-local x, meters. */
   x: number
-  /** Pool-local y of the bend point, meters. */
+  /** Pool-local y, meters. */
   y: number
-  /** Depth of the bend point, meters. */
+  /** Depth, meters (positive down). */
   depth: number
-  /** The obstacle the cable is caught on. */
-  obstacleId: string
 }
 
-/** A point in pool-local coordinates (subset of the sim's PoolPoint). */
-interface Point3 {
+/** One rope node: current + previous position (Verlet) and a contact flag. */
+export interface TetherNode {
   /** Pool-local x, meters. */
   x: number
   /** Pool-local y, meters. */
   y: number
   /** Depth, meters. */
   depth: number
+  /** Previous x (Verlet). */
+  px: number
+  /** Previous y (Verlet). */
+  py: number
+  /** Previous depth (Verlet). */
+  pd: number
+  /** True the step this node was in contact with something (drives friction + visuals). */
+  touching?: boolean
 }
 
-/** Minimal view of the rover state the tether needs. */
+/** Minimal view of the rover state the tether needs (mutated in place). */
 export interface TetherState {
   /** Pool-local x, meters. */
   x: number
@@ -58,25 +67,43 @@ export interface TetherState {
   swayVel: number
   /** Body down velocity, m/s. */
   heaveVel: number
-  /** Current tether wraps. */
-  tetherWraps: TetherWrap[]
+  /** The rope nodes (surface-anchor side first, rover side last). */
+  tetherNodes: TetherNode[]
+  /** Paid-out cable length on the dynamic span (hole/attach → rover), meters. */
+  tetherDeployed: number
+  /** The rover-rear attach point from the last step (renders the rope into the hull). */
+  roverEndCache?: Point3
   /** Whatever the rover is touching, set when the tether goes taut. */
   collidedWith?: string
-  /** Currently held obstacle id (never snags the tether). */
+  /** Currently held obstacle id (the cable ignores it). */
   heldObstacleId?: string
 }
 
-/** How far past an obstacle's radius the cable corner rides, meters. */
-const SNAG_MARGIN = 0.06
-/** Capture distance: how close the cable must pass an obstacle to catch on it. */
-const CATCH_RADIUS = 0.32
-/** Extra clearance (past the capture distance) before a wrap releases. */
-const RELEASE_MARGIN = 0.5
+/** Number of rope nodes (chain resolution). */
+const NODE_COUNT = 48
+/** Position-constraint relaxation iterations per step. */
+const SOLVE_ITERS = 8
+/** Rope radius, meters (collision standoff + render thickness). */
+export const TETHER_RADIUS = 0.045
+/** Catenary sag acceleration on free nodes, m/s² (gentle — cable is near-neutral). */
+const SAG_ACCEL = 0.6
+/** Per-step Verlet velocity retention (water drag); <1 damps. */
+const DAMPING = 0.9
+/** Contact friction: fraction of tangential velocity kept at a contact (low = grippy → stays tangled). */
+const CONTACT_SLIP = 0.25
+/** Winch pay-out / take-up rate, m/s. */
+const PAY_RATE = 1.2
+const TEND_RATE = 0.5
+/** Gap (m) beyond reach before the taut rope pulls the rover. */
+const TAUT_TOL = 0.05
+/** Max distance (m) the taut rope pulls the rover per step (stability clamp). */
+const MAX_PULL_PER_STEP = 0.5
 
-const segLen = (a: Point3, b: Point3): number => Math.hypot(b.x - a.x, b.y - a.y, b.depth - a.depth)
+const dist3 = (a: Point3, b: Point3): number => Math.hypot(b.x - a.x, b.y - a.y, b.depth - a.depth)
 
 /**
  * Fixed surface routing: the attach point, plus the ice launch hole if present.
+ * The dynamic rope hangs from the LAST of these to the rover.
  * @param {PracticeEnvironment} env The environment.
  * @returns {Point3[]} Surface anchor points, in order.
  */
@@ -87,32 +114,6 @@ const surfaceAnchors = (env: PracticeEnvironment): Point3[] => {
 }
 
 /**
- * The full tether path: surface anchors → wrap points → rover.
- * @param {TetherWrap[]} wraps Current wrap points.
- * @param {Point3} rover Rover position.
- * @param {PracticeEnvironment} env The environment.
- * @returns {Point3[]} Waypoints from attach point to rover.
- */
-export const tetherFullPath = (wraps: TetherWrap[], rover: Point3, env: PracticeEnvironment): Point3[] => [
-  ...surfaceAnchors(env),
-  ...wraps.map((w) => ({ x: w.x, y: w.y, depth: w.depth })),
-  rover,
-]
-
-/**
- * Deployed tether length along its real (wrapped, hole-routed) path.
- * @param {TetherState} state Current sim state (position + wraps).
- * @param {PracticeEnvironment} env The environment.
- * @returns {number} Deployed distance in meters.
- */
-export const tetherDeployedLength = (state: TetherState, env: PracticeEnvironment): number => {
-  const path = tetherFullPath(state.tetherWraps, { x: state.x, y: state.y, depth: state.depth }, env)
-  let total = 0
-  for (let i = 1; i < path.length; i++) total += segLen(path[i - 1], path[i])
-  return total
-}
-
-/**
  * Plan-view radius an obstacle presents to the cable.
  * @param {PracticeObstacle} o The obstacle.
  * @returns {number} Radius in meters.
@@ -120,189 +121,318 @@ export const tetherDeployedLength = (state: TetherState, env: PracticeEnvironmen
 const obstacleRadius = (o: PracticeObstacle): number =>
   o.shape === 'cylinder' ? o.size[0] / 2 : Math.max(o.size[0], o.size[1]) / 2
 
-/** Result of a closest-approach query. */
-interface Approach {
-  /** Parameter along the segment, [0, 1]. */
-  t: number
-  /** Plan-view distance from the point to the segment, meters. */
-  dist: number
-}
-
 /**
- * Closest approach of plan-view segment AB to a point O.
- * @param {Point3} a Segment start.
- * @param {Point3} b Segment end.
- * @param {number} ox Point x.
- * @param {number} oy Point y.
- * @returns {Approach} Parameter t in [0,1] and plan-view distance.
- */
-const closestApproach = (a: Point3, b: Point3, ox: number, oy: number): Approach => {
-  const dx = b.x - a.x
-  const dy = b.y - a.y
-  const len2 = dx * dx + dy * dy
-  const t = len2 < 1e-9 ? 0 : Math.max(0, Math.min(1, ((ox - a.x) * dx + (oy - a.y) * dy) / len2))
-  return { t, dist: Math.hypot(a.x + t * dx - ox, a.y + t * dy - oy) }
-}
-
-/**
- * Obstacles the cable can catch on (skip open hoops and the held prop).
+ * Build a fresh rope from the last surface anchor to the rover end, laid in a
+ * straight line (Verlet velocities zero).
  * @param {PracticeEnvironment} env The environment.
- * @param {string} heldId Id of the currently held prop, if any.
- * @returns {PracticeObstacle[]} Snaggable obstacles.
+ * @param {Point3} roverEnd The rover-rear attach point.
+ * @returns {TetherNode[]} The node chain.
  */
-const snaggable = (env: PracticeEnvironment, heldId?: string): PracticeObstacle[] =>
-  env.obstacles.filter((o) => o.shape !== 'ring' && o.id !== heldId)
-
-/**
- * Reposition existing wrap corners to hug the outside of each bend, so the cable
- * slides around a peg as the rover moves instead of staying pinned at one spot.
- * @param {TetherState} state The sim state (wraps mutated in place).
- * @param {PracticeEnvironment} env The environment.
- * @returns {void}
- */
-const repositionWraps = (state: TetherState, env: PracticeEnvironment): void => {
+export const initTetherNodes = (env: PracticeEnvironment, roverEnd: Point3): TetherNode[] => {
   const anchors = surfaceAnchors(env)
-  const rover: Point3 = { x: state.x, y: state.y, depth: state.depth }
-  for (let i = 0; i < state.tetherWraps.length; i++) {
-    const wrap = state.tetherWraps[i]
-    const obstacle = env.obstacles.find((o) => o.id === wrap.obstacleId)
-    if (!obstacle) continue
-    const before = i > 0 ? state.tetherWraps[i - 1] : anchors[anchors.length - 1]
-    const after = i < state.tetherWraps.length - 1 ? state.tetherWraps[i + 1] : rover
-    const [ox, oy] = [obstacle.position[0], obstacle.position[1]]
-    // Outward bisector of the two segments meeting at this corner.
-    const b = Math.hypot(before.x - ox, before.y - oy) || 1
-    const f = Math.hypot(after.x - ox, after.y - oy) || 1
-    let bx = (before.x - ox) / b + (after.x - ox) / f
-    let by = (before.y - oy) / b + (after.y - oy) / f
-    const bl = Math.hypot(bx, by)
-    if (bl < 1e-4) continue
-    bx /= bl
-    by /= bl
-    const r = obstacleRadius(obstacle) + SNAG_MARGIN
-    wrap.x = ox + bx * r
-    wrap.y = oy + by * r
+  const start = anchors[anchors.length - 1]
+  const nodes: TetherNode[] = []
+  for (let i = 0; i < NODE_COUNT; i++) {
+    const t = i / (NODE_COUNT - 1)
+    const x = start.x + (roverEnd.x - start.x) * t
+    const y = start.y + (roverEnd.y - start.y) * t
+    const depth = start.depth + (roverEnd.depth - start.depth) * t
+    nodes.push({ x, y, depth, px: x, py: y, pd: depth, touching: false })
   }
+  return nodes
 }
 
 /**
- * Release the last wrap (LIFO) while the straight run from the point before it
- * to the rover clears its obstacle — i.e. the rover has unwound past the peg.
- * @param {TetherState} state The sim state (wraps mutated in place).
+ * The full render/measure path: fixed surface anchors then the rope nodes.
+ * (Node 0 coincides with the last surface anchor, so it isn't duplicated.)
+ * @param {TetherState} state The sim state.
  * @param {PracticeEnvironment} env The environment.
- * @returns {void}
+ * @returns {Point3[]} Waypoints from attach point to rover.
  */
-const releaseWraps = (state: TetherState, env: PracticeEnvironment): void => {
+export const tetherFullPath = (state: TetherState, env: PracticeEnvironment): Point3[] => {
   const anchors = surfaceAnchors(env)
-  const rover: Point3 = { x: state.x, y: state.y, depth: state.depth }
-  while (state.tetherWraps.length > 0) {
-    const wraps = state.tetherWraps
-    const wrap = wraps[wraps.length - 1]
-    const obstacle = env.obstacles.find((o) => o.id === wrap.obstacleId)
-    if (!obstacle) {
-      wraps.pop()
-      continue
-    }
-    const before = wraps.length > 1 ? wraps[wraps.length - 2] : anchors[anchors.length - 1]
-    const { dist } = closestApproach(before, rover, obstacle.position[0], obstacle.position[1])
-    if (dist > obstacleRadius(obstacle) + CATCH_RADIUS + RELEASE_MARGIN) wraps.pop()
-    else break
-  }
+  const lead = anchors.slice(0, -1) // attach (and nothing else) when there's an ice hole
+  const nodes = state.tetherNodes.map((n) => ({ x: n.x, y: n.y, depth: n.depth }))
+  // Render the last point AT the rover rear, not the (possibly taut-and-short)
+  // last free node, so the cable always terminates in the hull's boss.
+  if (state.roverEndCache && nodes.length > 0) nodes[nodes.length - 1] = { ...state.roverEndCache }
+  return [...lead, ...nodes]
 }
 
 /**
- * Snag a new wrap if the free run from the last anchor to the rover crosses an
- * obstacle at the cable's depth. At most one new wrap per step.
- * @param {TetherState} state The sim state (wraps mutated in place).
+ * Deployed cable length (fixed surface run + paid-out dynamic span) — drives
+ * tether drag and the deployed/limit UI.
+ * @param {TetherState} state The sim state.
  * @param {PracticeEnvironment} env The environment.
- * @returns {void}
+ * @returns {number} Deployed length in meters.
  */
-const snagWraps = (state: TetherState, env: PracticeEnvironment): void => {
+export const tetherDeployedLength = (state: TetherState, env: PracticeEnvironment): number => {
   const anchors = surfaceAnchors(env)
-  const wraps = state.tetherWraps
-  const last = wraps.length > 0 ? wraps[wraps.length - 1] : anchors[anchors.length - 1]
-  const rover: Point3 = { x: state.x, y: state.y, depth: state.depth }
-  for (const obstacle of snaggable(env, state.heldObstacleId)) {
-    if (wraps.some((w) => w.obstacleId === obstacle.id)) continue
-    const [ox, oy, otop] = obstacle.position
-    const { t, dist } = closestApproach(last, rover, ox, oy)
-    if (t <= 0.05 || t >= 0.95) continue
-    const r = obstacleRadius(obstacle)
-    if (dist >= r + CATCH_RADIUS || dist < 1e-4) continue
-    // Depth band the cable plausibly occupies near this point, allowing for sag.
-    const cornerDepth = last.depth + t * (rover.depth - last.depth)
-    const bandTop = Math.min(last.depth, rover.depth) - 0.2
-    const bandBottom = Math.max(last.depth, rover.depth) + 1.0
-    if (otop > bandBottom || otop + obstacle.size[2] < bandTop) continue
-    const closeX = last.x + t * (rover.x - last.x)
-    const closeY = last.y + t * (rover.y - last.y)
-    const nx = (closeX - ox) / dist
-    const ny = (closeY - oy) / dist
-    wraps.push({
-      x: ox + nx * (r + SNAG_MARGIN),
-      y: oy + ny * (r + SNAG_MARGIN),
-      depth: cornerDepth,
-      obstacleId: obstacle.id,
-    })
-    return
-  }
+  let lead = 0
+  for (let i = 1; i < anchors.length; i++) lead += dist3(anchors[i - 1], anchors[i])
+  return lead + state.tetherDeployed
 }
 
 /**
- * Resolve all tether physics for this step: update snags, then enforce the hard
- * length limit along the wrapped path (pulling the rover onto the budget sphere
- * around the final anchor and killing its outward momentum).
- * @param {TetherState} state The sim state (mutated in place).
+ * Push one node out of a single obstacle (capsule for cylinders/rings, vertical
+ * box for boxes), returning true if it was in contact.
+ * @param {TetherNode} node The node (mutated).
+ * @param {PracticeObstacle} o The obstacle.
+ * @returns {boolean} True if the node was pushed out.
+ */
+const collideNodeWithObstacle = (node: TetherNode, o: PracticeObstacle): boolean => {
+  const [ox, oy, otop] = o.position
+  const obottom = otop + (o.shape === 'ring' ? o.size[0] : o.size[2])
+  if (node.depth < otop - TETHER_RADIUS || node.depth > obottom + TETHER_RADIUS) return false
+  if (o.shape === 'box') {
+    const hx = o.size[0] / 2 + TETHER_RADIUS
+    const hy = o.size[1] / 2 + TETHER_RADIUS
+    const dx = node.x - ox
+    const dy = node.y - oy
+    if (Math.abs(dx) >= hx || Math.abs(dy) >= hy) return false
+    // Push out along the least-penetrating horizontal face.
+    if (hx - Math.abs(dx) < hy - Math.abs(dy)) node.x = ox + Math.sign(dx || 1) * hx
+    else node.y = oy + Math.sign(dy || 1) * hy
+    return true
+  }
+  // cylinder / ring: radial push in plan view.
+  const r = obstacleRadius(o) + TETHER_RADIUS
+  const dx = node.x - ox
+  const dy = node.y - oy
+  const d = Math.hypot(dx, dy)
+  if (d >= r) return false
+  if (d < 1e-6) {
+    node.x = ox + r
+  } else {
+    node.x = ox + (dx / d) * r
+    node.y = oy + (dy / d) * r
+  }
+  return true
+}
+
+/**
+ * Constrain a node to the pool box (walls, floor, surface/ice), returning true
+ * on contact.
+ * @param {TetherNode} node The node (mutated).
  * @param {PracticeEnvironment} env The environment.
+ * @returns {boolean} True if clamped.
+ */
+const collideNodeWithPool = (node: TetherNode, env: PracticeEnvironment): boolean => {
+  const { length: L, width: W, depth: D } = env.pool
+  let touched = false
+  const minX = TETHER_RADIUS
+  const maxX = L - TETHER_RADIUS
+  const minY = TETHER_RADIUS
+  const maxY = W - TETHER_RADIUS
+  if (node.x < minX) {
+    node.x = minX
+    touched = true
+  } else if (node.x > maxX) {
+    node.x = maxX
+    touched = true
+  }
+  if (node.y < minY) {
+    node.y = minY
+    touched = true
+  } else if (node.y > maxY) {
+    node.y = maxY
+    touched = true
+  }
+  if (node.depth > D - TETHER_RADIUS) {
+    node.depth = D - TETHER_RADIUS
+    touched = true
+  }
+  if (node.depth < 0) {
+    node.depth = 0
+    touched = true
+  }
+  return touched
+}
+
+/**
+ * Advance the rope one step and resolve its effect on the rover.
+ * @param {TetherState} state The sim state (rope + rover, mutated in place).
+ * @param {PracticeEnvironment} env The environment.
+ * @param {Point3} roverEnd The rover-rear attach point this step.
+ * @param {number} dt Timestep, seconds.
  * @returns {void}
  */
-export const applyTetherPhysics = (state: TetherState, env: PracticeEnvironment): void => {
+export const applyTetherPhysics = (
+  state: TetherState,
+  env: PracticeEnvironment,
+  roverEnd: Point3,
+  dt: number
+): void => {
   if (!env.tether.enabled) {
-    state.tetherWraps = []
+    state.tetherNodes = []
     return
   }
-  repositionWraps(state, env)
-  releaseWraps(state, env)
-  snagWraps(state, env)
-
-  // Length limit along the full path; the final free segment gets what's left.
   const anchors = surfaceAnchors(env)
-  const chain = [...anchors, ...state.tetherWraps.map((w) => ({ x: w.x, y: w.y, depth: w.depth }))]
-  const anchor = chain[chain.length - 1]
-  let priorLen = 0
-  for (let i = 1; i < chain.length; i++) priorLen += segLen(chain[i - 1], chain[i])
-  const budget = Math.max(env.tether.length - priorLen, 0.1)
-  const rover: Point3 = { x: state.x, y: state.y, depth: state.depth }
-  const free = segLen(anchor, rover)
-  if (free <= budget) return
+  const start = anchors[anchors.length - 1]
+  // The dynamic rope (hole/attach → rover) shares the total cable budget with
+  // the fixed surface run, so its max length is what's left after the lead.
+  let leadLen = 0
+  for (let i = 1; i < anchors.length; i++) leadLen += dist3(anchors[i - 1], anchors[i])
+  const maxDynamic = Math.max(env.tether.length - leadLen, 0.5)
 
-  const scale = budget / free
-  state.x = anchor.x + (state.x - anchor.x) * scale
-  state.y = anchor.y + (state.y - anchor.y) * scale
-  state.depth = Math.max(0, anchor.depth + (state.depth - anchor.depth) * scale)
-  // Kill the velocity component pointing away from the anchor.
-  const away = [(state.x - anchor.x) / budget, (state.y - anchor.y) / budget, (state.depth - anchor.depth) / budget]
-  const [wx, wy, wz] = bodyToWorld(
-    state.surgeVel,
-    state.swayVel,
-    state.heaveVel,
-    state.roll,
-    state.pitch,
-    state.heading
-  )
-  const outward = wx * away[0] + wy * away[1] + wz * away[2]
-  if (outward > 0) {
-    const [bu, bv, bw] = worldToBody(
-      wx - away[0] * outward,
-      wy - away[1] * outward,
-      wz - away[2] * outward,
-      state.roll,
-      state.pitch,
-      state.heading
-    )
-    state.surgeVel = bu
-    state.swayVel = bv
-    state.heaveVel = bw
+  // (Re)initialize if the rope is missing or the wrong size.
+  if (state.tetherNodes.length !== NODE_COUNT) {
+    state.tetherNodes = initTetherNodes(env, roverEnd)
+    state.tetherDeployed = Math.min(maxDynamic, Math.max(dist3(start, roverEnd) * 1.05, 0.5))
   }
-  state.collidedWith = state.collidedWith ?? (state.tetherWraps.length > 0 ? 'tether (snagged)' : 'tether (taut)')
+  const nodes = state.tetherNodes
+  const last = NODE_COUNT - 1
+  state.roverEndCache = { x: roverEnd.x, y: roverEnd.y, depth: Math.max(0, roverEnd.depth) }
+
+  // Verlet integration of the free interior nodes (ends are pinned below).
+  const sub = Math.min(dt, 0.05)
+  const obstacles = env.obstacles.filter((o) => o.id !== state.heldObstacleId)
+  for (let i = 1; i < last; i++) {
+    const n = nodes[i]
+    const vx = (n.x - n.px) * DAMPING
+    const vy = (n.y - n.py) * DAMPING
+    const vd = (n.depth - n.pd) * DAMPING
+    n.px = n.x
+    n.py = n.y
+    n.pd = n.depth
+    n.x += vx
+    n.y += vy
+    n.depth += vd + SAG_ACCEL * sub * sub
+    n.touching = false
+  }
+
+  // Pin node 0 at the surface anchor. The LAST node is seeded at the rover rear
+  // but left FREE during the solve, so an inextensible rope that can't reach the
+  // rover simply falls short (the gap = tension) instead of overstretching.
+  nodes[0].x = start.x
+  nodes[0].y = start.y
+  nodes[0].depth = start.depth
+  nodes[last].x = roverEnd.x
+  nodes[last].y = roverEnd.y
+  nodes[last].depth = Math.max(0, roverEnd.depth)
+
+  // Relax distance constraints + collisions. Each segment is held at the rest
+  // length set by the paid-out cable; only node 0 is pinned.
+  const seg = state.tetherDeployed / (NODE_COUNT - 1)
+  for (let iter = 0; iter < SOLVE_ITERS; iter++) {
+    for (let i = 0; i < last; i++) {
+      const a = nodes[i]
+      const b = nodes[i + 1]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const dd = b.depth - a.depth
+      const d = Math.hypot(dx, dy, dd) || 1e-6
+      const diff = (d - seg) / d
+      const wa = i === 0 ? 0 : 0.5
+      const wb = i === 0 ? 1 : 0.5
+      a.x += dx * diff * wa
+      a.y += dy * diff * wa
+      a.depth += dd * diff * wa
+      b.x -= dx * diff * wb
+      b.y -= dy * diff * wb
+      b.depth -= dd * diff * wb
+    }
+    // Collisions on the interior nodes (the end nodes are the anchors).
+    for (let i = 1; i < last; i++) {
+      const n = nodes[i]
+      let hit = collideNodeWithPool(n, env)
+      for (const o of obstacles) if (collideNodeWithObstacle(n, o)) hit = true
+      if (hit) n.touching = true
+    }
+    nodes[0].x = start.x
+    nodes[0].y = start.y
+    nodes[0].depth = start.depth
+  }
+
+  // Contact friction: a node that touched something this step keeps only a
+  // little of its tangential velocity, so the rope grabs and stays tangled.
+  for (let i = 1; i < last; i++) {
+    const n = nodes[i]
+    if (!n.touching) continue
+    n.px = n.x + (n.px - n.x) * CONTACT_SLIP
+    n.py = n.y + (n.py - n.y) * CONTACT_SLIP
+    n.pd = n.depth + (n.pd - n.depth) * CONTACT_SLIP
+  }
+
+  const anyContact = nodes.some((n) => n.touching)
+
+  // Tension: the gap between where the rope can reach and where the rover is.
+  let gx = roverEnd.x - nodes[last].x
+  let gy = roverEnd.y - nodes[last].y
+  let gd = roverEnd.depth - nodes[last].depth
+  const gap = Math.hypot(gx, gy, gd)
+
+  if (gap > TAUT_TOL) {
+    if (state.tetherDeployed < maxDynamic) {
+      // Winch still has cable: pay out so the rope reaches next step.
+      state.tetherDeployed = Math.min(maxDynamic, state.tetherDeployed + PAY_RATE * dt)
+    } else {
+      // Out of cable: pull the rover back to where the rope can reach (clamped
+      // per step for stability) and kill its outward momentum.
+      const pull = Math.min(gap, MAX_PULL_PER_STEP)
+      gx /= gap
+      gy /= gap
+      gd /= gap
+      state.x -= gx * pull
+      state.y -= gy * pull
+      state.depth = Math.max(0, state.depth - gd * pull)
+      const [wx, wy, wz] = bodyToWorld(
+        state.surgeVel,
+        state.swayVel,
+        state.heaveVel,
+        state.roll,
+        state.pitch,
+        state.heading
+      )
+      const outward = wx * gx + wy * gy + wz * gd
+      if (outward > 0) {
+        const [bu, bv, bw] = worldToBody(
+          wx - gx * outward,
+          wy - gy * outward,
+          wz - gd * outward,
+          state.roll,
+          state.pitch,
+          state.heading
+        )
+        state.surgeVel = bu
+        state.swayVel = bv
+        state.heaveVel = bw
+      }
+      state.collidedWith = state.collidedWith ?? (anyContact ? 'tether (snagged)' : 'tether (taut)')
+    }
+  } else {
+    // Slack and reaching: gently take up extra cable so slack doesn't pile up.
+    // Compare against the TRUE straight-line reach (start → rover), NOT the
+    // sagged node-chain length — the latter inflates to track the deployed
+    // length once slack rope piles on the floor, so take-up would never fire.
+    // A rope snagged on an OBSTACLE legitimately needs more than the straight
+    // run, so don't reel that in (floor contact alone is fine to take up).
+    const snaggedOnObstacle = tetherSnaggedObstacleIds(state, env).length > 0
+    if (!snaggedOnObstacle && state.tetherDeployed > dist3(start, roverEnd) + 0.8) {
+      state.tetherDeployed = Math.max(0.5, state.tetherDeployed - TEND_RATE * dt)
+    }
+    if (anyContact && !state.collidedWith) state.collidedWith = 'tether (snagged)'
+  }
+}
+
+/**
+ * Ids of obstacles the rope is currently caught on (for highlighting them).
+ * @param {TetherState} state The sim state.
+ * @param {PracticeEnvironment} env The environment.
+ * @returns {string[]} Obstacle ids in contact with the cable.
+ */
+export const tetherSnaggedObstacleIds = (state: TetherState, env: PracticeEnvironment): string[] => {
+  const ids = new Set<string>()
+  for (const n of state.tetherNodes) {
+    if (!n.touching) continue
+    for (const o of env.obstacles) {
+      if (o.id === state.heldObstacleId) continue
+      const [ox, oy, otop] = o.position
+      const obottom = otop + (o.shape === 'ring' ? o.size[0] : o.size[2])
+      if (n.depth < otop - TETHER_RADIUS - 0.05 || n.depth > obottom + TETHER_RADIUS + 0.05) continue
+      const reach = obstacleRadius(o) + TETHER_RADIUS + 0.06
+      if (Math.hypot(n.x - ox, n.y - oy) <= reach) ids.add(o.id)
+    }
+  }
+  return [...ids]
 }

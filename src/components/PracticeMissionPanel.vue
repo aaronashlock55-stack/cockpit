@@ -20,11 +20,26 @@
           </option>
         </select>
         <div class="row">
-          <button class="mini" :disabled="!selectedId" @click="startReplay('watch')">▶ Watch</button>
-          <button class="mini" :disabled="!selectedId" @click="startReplay('ghost')">👻 Ghost</button>
-          <button class="mini" :disabled="!selectedId" @click="exportSelected">💾</button>
-          <button class="mini" @click="importInput?.click()">📂</button>
-          <button class="mini danger" :disabled="!selectedId" @click="deleteSelected">🗑</button>
+          <button class="mini" :disabled="!selectedId" title="Replay this run" @click="startReplay('watch')">
+            ▶ Watch
+          </button>
+          <button class="mini" :disabled="!selectedId" title="Race this run as a ghost" @click="startReplay('ghost')">
+            👻 Ghost
+          </button>
+        </div>
+        <div class="row">
+          <button class="mini" :disabled="!selectedId" title="Download as a .dive.json file" @click="exportSelected">
+            💾 Export
+          </button>
+          <button class="mini" title="Load a .dive.json file" @click="importInput?.click()">📂 Import</button>
+          <button
+            class="mini danger"
+            :disabled="!selectedId"
+            :title="confirmDelete ? 'Click again to confirm' : 'Delete this run'"
+            @click="onDeleteClick"
+          >
+            {{ confirmDelete ? '🗑 Sure?' : '🗑 Delete' }}
+          </button>
         </div>
         <input ref="importInput" type="file" accept=".json" class="hidden-input" @change="importFile" />
       </div>
@@ -236,7 +251,18 @@ const importFile = async (event: Event): Promise<void> => {
   }
 }
 
-const deleteSelected = async (): Promise<void> => {
+// Two-click delete confirm so a misclick can't nuke a run.
+const confirmDelete = ref(false)
+let confirmTimer: ReturnType<typeof setTimeout> | undefined
+const onDeleteClick = async (): Promise<void> => {
+  if (!confirmDelete.value) {
+    confirmDelete.value = true
+    if (confirmTimer) clearTimeout(confirmTimer)
+    confirmTimer = setTimeout(() => (confirmDelete.value = false), 2500)
+    return
+  }
+  confirmDelete.value = false
+  if (confirmTimer) clearTimeout(confirmTimer)
   await deleteDiveLog(selectedId.value)
   selectedId.value = ''
   diveLogsVersion.value++

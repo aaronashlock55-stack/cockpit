@@ -3,6 +3,7 @@ import { settingsManager } from '@/libs/settings-management'
 
 import 'floating-vue/dist/style.css'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import '@/components/widgets/practice-hud.css' // global so :root HUD tokens aren't scoped away
 import '@/libs/system-logging'
 import '@/utils/widget-migrations'
 

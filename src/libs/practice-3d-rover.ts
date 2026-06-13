@@ -100,6 +100,13 @@ export const buildRoverModel = (profile: RoverProfile): RoverModel => {
     group.add(light)
   }
 
+  // Tether strain-relief boss at the top-rear, where the cable plugs in (local
+  // frame: rear = +Z, up = +Y). Matches tetherAttachPoint() in rover-simulator.
+  const boss = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 0.06, 12), plastic)
+  boss.rotation.x = Math.PI / 2
+  boss.position.set(0, H * 0.32, L * 0.46)
+  group.add(boss)
+
   // Thrusters at their REAL mounted positions, oriented from the mix weights.
   const props: THREE.Group[] = []
   profile.thrusters.forEach((t, i) => {

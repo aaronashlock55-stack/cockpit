@@ -17,33 +17,56 @@
         @dblclick="resetCamera"
       />
       <VideoHudOverlay v-if="widget.options.showHud && cameraMode === 'fp'" />
-      <div v-if="readout.sensors" class="sensor-hud">
+      <div class="collision-flash" :class="{ show: collisionFlash }" />
+      <div v-if="readout.sensors" class="hud-strip telemetry">
         <span :class="{ warn: readout.sensors.dvl.altitudeM < 0.5 }">
-          ALT {{ readout.sensors.dvl.altitudeM.toFixed(2) }} m
+          ALT <b>{{ readout.sensors.dvl.altitudeM.toFixed(2) }}</b> m
         </span>
         <span :class="{ warn: readout.sensors.forwardRangeM < 1.5 }">
-          FWD {{ readout.sensors.forwardRangeM.toFixed(1) }} m
+          FWD <b>{{ readout.sensors.forwardRangeM.toFixed(1) }}</b> m
         </span>
-        <span>SOG {{ Math.hypot(readout.sensors.dvl.vx, readout.sensors.dvl.vy).toFixed(2) }} m/s</span>
+        <span
+          >SOG <b>{{ Math.hypot(readout.sensors.dvl.vx, readout.sensors.dvl.vy).toFixed(2) }}</b> m/s</span
+        >
+        <span
+          >DEP <b>{{ readout.depth.toFixed(2) }}</b> m</span
+        >
       </div>
       <PracticeMissionPanel />
       <div class="view-controls">
-        <button class="view-button" @click="toggleCamera">
-          {{ cameraMode === 'fp' ? '🎥 Chase cam' : '🤿 ROV cam' }}
+        <button
+          class="hud-btn"
+          :title="cameraMode === 'fp' ? 'Switch to chase camera' : 'Switch to ROV camera'"
+          @click="toggleCamera"
+        >
+          {{ cameraMode === 'fp' ? '🎥 Chase' : '🤿 ROV' }}
         </button>
-        <button v-if="cameraAdjusted" class="view-button" title="Recenter camera" @click="resetCamera">
+        <button class="hud-btn" :disabled="!cameraAdjusted" title="Recenter the camera" @click="resetCamera">
           ⟳ Recenter
         </button>
+        <button
+          class="hud-btn"
+          :class="{ off: !widget.options.showHud }"
+          title="Toggle the video HUD overlay"
+          @click="toggleHud"
+        >
+          {{ widget.options.showHud ? '🅷 HUD' : '🅷 HUD off' }}
+        </button>
       </div>
-      <div class="bottom-hints">
-        <span v-if="readout.recentPass" class="passed">✔ {{ readout.recentPass }}</span>
-        <span v-if="readout.collidedWith" class="collision">⚠ {{ readout.collidedWith }}</span>
-        <span v-if="heldName" class="holding">✊ holding: {{ heldName }}</span>
-        <span v-else-if="(readout.gripper ?? 0) > 0.5" class="holding dim">claw closed</span>
-        <span v-if="env.tether.enabled" class="keys" :class="{ taut: tetherTaut }">
-          tether {{ readout.tetherDeployed.toFixed(1) }}/{{ env.tether.length }} m
+      <div class="status-strip">
+        <span v-if="readout.recentPass" class="chip ok">✔ {{ readout.recentPass }}</span>
+        <span v-if="readout.collidedWith" class="chip warn">⚠ {{ readout.collidedWith }}</span>
+        <span v-if="heldName" class="chip hold">✊ {{ heldName }}</span>
+        <span v-else-if="(readout.gripper ?? 0) > 0.5" class="chip dim">claw closed</span>
+        <span v-if="env.tether.enabled" class="chip" :class="{ warn: tetherTaut }">
+          🪢 {{ readout.tetherDeployed.toFixed(1) }}/{{ env.tether.length }} m
         </span>
-        <span class="keys">W A S D move · ← → turn · ↑ ↓ depth · G claw · C camera · drag look · scroll zoom</span>
+      </div>
+      <div class="keys-help" :class="{ open: showKeys }">
+        <button class="hud-btn keys-toggle" @click="toggleKeys">⌨ {{ showKeys ? 'hide' : 'keys' }}</button>
+        <span v-if="showKeys" class="keys-text"
+          >W A S D move · ← → turn · ↑ ↓ depth · G claw · C camera · drag look · scroll zoom</span
+        >
       </div>
     </template>
   </div>
@@ -79,10 +102,32 @@ const container = ref<HTMLDivElement>()
 const canvas = ref<HTMLCanvasElement>()
 const readout = computed(() => practiceSimReadout.value)
 const cameraMode = ref<'fp' | 'chase'>('fp')
+const showKeys = ref(false)
 
 const toggleCamera = (): void => {
   cameraMode.value = cameraMode.value === 'fp' ? 'chase' : 'fp'
 }
+const toggleKeys = (): void => {
+  showKeys.value = !showKeys.value
+}
+const toggleHud = (): void => {
+  widget.value.options = { ...widget.value.options, showHud: !widget.value.options.showHud }
+}
+
+// Glanceable collision feedback: flash a red edge vignette when a NEW contact
+// starts, so a pilot watching the 3D view catches it in peripheral vision.
+const collisionFlash = ref(false)
+let flashTimer: ReturnType<typeof setTimeout> | undefined
+watch(
+  () => practiceSimReadout.value?.collidedWith,
+  (now, was) => {
+    if (now && now !== was) {
+      collisionFlash.value = true
+      if (flashTimer) clearTimeout(flashTimer)
+      flashTimer = setTimeout(() => (collisionFlash.value = false), 320)
+    }
+  }
+)
 
 const onViewKey = (event: KeyboardEvent): void => {
   const target = event.target as HTMLElement | null
@@ -238,6 +283,7 @@ const renderLoop = (): void => {
       cameraMode: cameraMode.value,
       speed: watching ? replayFrame?.speed ?? 0 : livePose.speed,
       tetherPath: watching ? undefined : r.tetherPath,
+      tetherSnagged: watching ? undefined : r.tetherSnagged,
       cameraAdjust: cameraAdjust.value,
       accel: watching ? { surge: 0, sway: 0, heave: 0 } : accel,
       thrusterOutputs: watching ? replayFrame?.thrusterOutputs : r.thrusterOutputs,
@@ -328,82 +374,144 @@ onBeforeUnmount(() => {
   text-align: center;
   padding: 1rem;
 }
-.bottom-hints {
+/* Red edge vignette that flashes on a new collision. */
+.collision-flash {
   position: absolute;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%);
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+  transition: opacity 0.28s ease-out;
+  box-shadow: inset 0 0 80px 18px rgb(255 60 60 / 70%);
+}
+.collision-flash.show {
+  opacity: 1;
+  transition: opacity 0.05s ease-in;
+}
+/* Telemetry strip (top-center): ALT / FWD / SOG / DEP. */
+.hud-strip {
+  position: absolute;
   display: flex;
-  gap: 1rem;
+  gap: 0.85rem;
   align-items: center;
-  font-family: monospace;
-  font-size: 0.7rem;
-  color: rgb(255 255 255 / 75%);
-  background-color: rgb(0 0 0 / 40%);
-  padding: 2px 10px;
-  border-radius: 10px;
+  font-family: var(--hud-font);
+  font-size: var(--hud-font-size);
+  color: var(--hud-fg);
+  background-color: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  padding: 3px 11px;
+  border-radius: var(--hud-radius);
   white-space: nowrap;
   pointer-events: none;
-  z-index: 5;
+  z-index: 6;
 }
-.bottom-hints .collision {
-  color: rgb(255 110 110);
+.hud-strip b {
+  color: #fff;
   font-weight: 700;
 }
-.bottom-hints .holding {
-  color: rgb(120 230 140);
-  font-weight: 700;
+.hud-strip .warn,
+.hud-strip .warn b {
+  color: var(--hud-warn);
 }
-.bottom-hints .holding.dim {
-  color: rgb(200 220 200 / 80%);
-  font-weight: 400;
+.telemetry {
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
 }
-.bottom-hints .passed {
-  color: rgb(110 255 160);
-  font-weight: 700;
-}
-.bottom-hints .keys.taut {
-  color: rgb(255 110 110);
-  font-weight: 700;
-}
+/* Camera/view toolbar (top-right). */
 .view-controls {
   position: absolute;
   top: 8px;
   right: 10px;
   z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-end;
 }
-.view-button {
-  font-family: monospace;
-  font-size: 0.72rem;
-  color: rgb(255 255 255 / 90%);
-  background-color: rgb(0 0 0 / 45%);
-  border: 1px solid rgb(255 255 255 / 25%);
-  border-radius: 8px;
+.hud-btn {
+  font-family: var(--hud-font);
+  font-size: var(--hud-font-size);
+  color: var(--hud-fg);
+  background-color: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: var(--hud-radius);
   padding: 3px 10px;
   cursor: pointer;
 }
-.view-button:hover {
-  background-color: rgb(0 0 0 / 65%);
+.hud-btn:hover:not(:disabled) {
+  background-color: var(--hud-bg-strong);
+  color: #fff;
 }
-.sensor-hud {
+.hud-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.hud-btn.off {
+  color: var(--hud-fg-dim);
+}
+/* Live status chips (bottom-center) — only active states show. */
+.status-strip {
   position: absolute;
-  top: 8px;
+  bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 0.8rem;
-  font-family: monospace;
-  font-size: 0.7rem;
-  color: rgb(170 230 235 / 90%);
-  background-color: rgb(0 0 0 / 40%);
-  padding: 2px 10px;
-  border-radius: 10px;
-  white-space: nowrap;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 92%;
   pointer-events: none;
-  z-index: 6;
+  z-index: 5;
 }
-.sensor-hud .warn {
-  color: rgb(255 120 120);
+.chip {
+  font-family: var(--hud-font);
+  font-size: var(--hud-font-size-sm);
+  color: var(--hud-fg);
+  background-color: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+.chip.ok {
+  color: var(--hud-ok);
   font-weight: 700;
+}
+.chip.warn {
+  color: var(--hud-warn);
+  font-weight: 700;
+}
+.chip.hold {
+  color: var(--hud-ok);
+  font-weight: 700;
+}
+.chip.dim {
+  color: var(--hud-fg-dim);
+}
+/* Collapsible key legend (bottom-left). */
+.keys-help {
+  position: absolute;
+  bottom: 8px;
+  left: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.keys-toggle {
+  font-size: var(--hud-font-size-sm);
+  pointer-events: auto;
+}
+.keys-text {
+  font-family: var(--hud-font);
+  font-size: var(--hud-font-size-sm);
+  color: var(--hud-fg-dim);
+  background-color: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: var(--hud-radius);
+  padding: 2px 9px;
+  white-space: nowrap;
 }
 </style>

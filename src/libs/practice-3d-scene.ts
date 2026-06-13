@@ -58,8 +58,10 @@ export interface WorldUpdateOptions {
   cameraMode?: 'fp' | 'chase'
   /** Vehicle speed (m/s) — drives propeller spin, FOV and chase distance cues. */
   speed?: number
-  /** Full tether path (attach → hole → snag points → rover) as [x, y, depth] triples. */
+  /** Full tether path (attach → hole → rope nodes → rover rear) as [x, y, depth] triples. */
   tetherPath?: [number, number, number][]
+  /** Ids of obstacles the tether is caught on (highlighted in the scene). */
+  tetherSnagged?: string[]
   /** Operator camera look/zoom adjustment. */
   cameraAdjust?: CameraAdjust
   /** Body-frame acceleration for first-person micro-inertia cues. */
@@ -304,13 +306,19 @@ export const buildPracticeWorld = (
   })
   scene.add(ghost.group)
 
-  // Tether: a real rope (tube) that sags in proportion to slack, straightens
-  // and turns red as it runs out, and routes through the ice launch hole.
-  // Always built; visibility follows env.tether.enabled live (no rebuild).
-  const tetherMaterial = new THREE.MeshBasicMaterial({ color: TETHER_SLACK.clone() })
+  // Tether: a real lit rope (tube) that follows the physics rope's nodes — so
+  // its sag, wraps and tangles are the actual simulated shape — reddening as it
+  // runs taut. Always built; visibility follows env.tether.enabled live.
+  const tetherMaterial = new THREE.MeshStandardMaterial({
+    color: TETHER_SLACK.clone(),
+    roughness: 0.5,
+    metalness: 0.1,
+    emissive: new THREE.Color(0x000000),
+  })
   const tether = new THREE.Mesh(new THREE.BufferGeometry(), tetherMaterial)
   tether.name = 'tether'
   tether.frustumCulled = false
+  tether.castShadow = true
   scene.add(tether)
 
   // First-person camera MOUNTED ON the rover model — the camera and vehicle are
@@ -359,6 +367,12 @@ export const buildPracticeWorld = (
   const lastPos = new THREE.Vector3(NaN, NaN, NaN)
   const velWorld = new THREE.Vector3()
   const camWorld = new THREE.Vector3()
+  // Pooled rope geometry buffers (refreshed in place each frame — no per-frame
+  // Vector3/curve allocation; only the tube geometry itself is rebuilt).
+  const tetherPts: THREE.Vector3[] = []
+  const tetherCurve = new THREE.CatmullRomCurve3([new THREE.Vector3(), new THREE.Vector3()])
+  const ORANGE = new THREE.Color(0xff7040)
+  const BLACK = new THREE.Color(0x000000)
   let chaseInit = false
   const roverL = Math.max(profile.dimensions.length, 0.3)
   /** Chase rig stiffness, 1/s (frame-rate independent via exp smoothing). */
@@ -467,29 +481,45 @@ export const buildPracticeWorld = (
       )
     }
 
-    // Tether rope: sag from slack, color from tautness, routed via the ice hole
-    // and bent around any obstacles it has snagged on (from the sim's path).
+    // Tether rope: follow the physics rope's nodes directly (their sag + wraps
+    // ARE the simulated shape) as a smooth lit tube; redden + glow as it runs taut.
     tether.visible = env.tether.enabled
     if (tether.visible) {
-      const path = opts.tetherPath
-        ? opts.tetherPath.map(([x, y, depth]) => ({ x, y, depth }))
-        : tetherWorldPath({ x: pose.x, y: pose.y, depth: pose.depth }, env)
-      let deployed = 0
-      const samples: THREE.Vector3[] = []
-      for (let i = 1; i < path.length; i++) {
-        const a = new THREE.Vector3(path[i - 1].x, -path[i - 1].depth, path[i - 1].y)
-        const b = new THREE.Vector3(path[i].x, -path[i].depth, path[i].y)
-        deployed += a.distanceTo(b)
-        const slackRatio = Math.max(0, 1 - deployed / Math.max(env.tether.length, 0.1))
-        const mid = a.clone().lerp(b, 0.5)
-        mid.y -= a.distanceTo(b) * (0.03 + 0.4 * slackRatio)
-        const seg = new THREE.QuadraticBezierCurve3(a, mid, b).getPoints(14)
-        samples.push(...(i > 1 ? seg.slice(1) : seg))
+      const src =
+        opts.tetherPath ??
+        tetherWorldPath({ x: pose.x, y: pose.y, depth: pose.depth }, env).map(
+          (p) => [p.x, p.y, p.depth] as [number, number, number]
+        )
+      // Refresh the pooled point array in place (no per-frame Vector3 allocation).
+      if (tetherPts.length > src.length) tetherPts.length = src.length
+      for (let i = 0; i < src.length; i++) {
+        const [x, y, depth] = src[i]
+        if (tetherPts[i]) tetherPts[i].set(x, -depth, y)
+        else tetherPts[i] = new THREE.Vector3(x, -depth, y)
       }
-      const tautness = Math.min(1, deployed / Math.max(env.tether.length, 0.1))
-      tetherMaterial.color.lerpColors(TETHER_SLACK, TETHER_TAUT, Math.max(0, (tautness - 0.7) / 0.3))
-      tether.geometry.dispose()
-      tether.geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(samples), samples.length, 0.018, 6, false)
+      if (tetherPts.length >= 2) {
+        let deployed = 0
+        for (let i = 1; i < tetherPts.length; i++) deployed += tetherPts[i - 1].distanceTo(tetherPts[i])
+        const tautness = Math.min(1, deployed / Math.max(env.tether.length, 0.1))
+        const heat = Math.max(0, (tautness - 0.55) / 0.45) // start reddening at 55%
+        tetherMaterial.color.lerpColors(TETHER_SLACK, TETHER_TAUT, heat)
+        tetherMaterial.emissive.setRGB(0.5 * heat, 0.05 * heat, 0.05 * heat) // taut cable glows
+        tetherCurve.points = tetherPts
+        tether.geometry.dispose()
+        tether.geometry = new THREE.TubeGeometry(tetherCurve, Math.max(24, tetherPts.length * 2), 0.03, 8, false)
+      }
+    }
+
+    // Highlight obstacles the cable is caught on — runs every frame (even when
+    // the tether is disabled) so a formerly-snagged prop fades back to normal.
+    const snagged = new Set(opts.tetherSnagged ?? [])
+    for (const [id, mesh] of obstacleMeshes) {
+      const mat = mesh.material as THREE.MeshStandardMaterial
+      if (!mat.emissive) continue
+      const on = snagged.has(id)
+      const target = on ? 0.5 : 0
+      mat.emissive.lerp(on ? ORANGE : BLACK, 0.2)
+      mat.emissiveIntensity = mat.emissiveIntensity + (target - (mat.emissiveIntensity || 0)) * 0.2
     }
   }
 

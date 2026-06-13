@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { hydroModel, mixToBodyForce } from '@/libs/rover-hydro'
 import { gripperPoint, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
+import { tetherSnaggedObstacleIds } from '@/libs/rover-tether'
 import { type PracticeEnvironment } from '@/types/practice-environment'
 import { type BodyAxes, type RoverProfile, blueRov2HeavyProfile, blueRov2Profile } from '@/types/rover-profile'
 
@@ -229,45 +230,44 @@ describe('tether', () => {
     expect(withTether.surgeVel).toBeLessThan(withoutTether.surgeVel)
   })
 
-  it('routes through the ice launch hole (longer real path than the straight line)', () => {
-    const env = makeEnv({
-      iceSheet: { thickness: 0.03, holeCenter: [3, 5], holeSize: 1 },
-      tether: { enabled: true, length: 50, attachPoint: [0, 5] },
-    })
-    const state = { ...initialSimState(env), x: 10, y: 5, depth: 2 }
-    // attach→hole = 3 m on the surface, hole→rover = hypot(7, 0, 2).
-    const expected = 3 + Math.hypot(7, 0, 2)
-    expect(tetherDeployedLength(state, env)).toBeCloseTo(expected, 5)
-    expect(expected).toBeGreaterThan(Math.hypot(10, 0, 2)) // longer than straight-line
-  })
-
-  it('the hole-routed tether limits range measured along the path', () => {
+  it('the hole-routed tether limits range past the launch hole', () => {
     const env = makeEnv({
       iceSheet: { thickness: 0.03, holeCenter: [3, 5], holeSize: 1 },
       tether: { enabled: true, length: 8, attachPoint: [0, 5] },
     })
     const start = { ...initialSimState(env), x: 3, y: 5, depth: 1 }
     const state = run(env, { ...zeroDemand, surge: 1 }, 1000, start)
-    expect(tetherDeployedLength(state, env)).toBeLessThanOrEqual(env.tether.length + 0.01)
-    // Only 5 m of slack past the hole at (3,5): the rover cannot reach x = 10.
-    expect(state.x).toBeLessThan(8.1)
+    expect(tetherDeployedLength(state, env)).toBeLessThanOrEqual(env.tether.length + 0.3)
+    // ~8 m of cable from the hole at (3,5): the rover cannot reach the far wall.
+    expect(state.x).toBeLessThan(12)
   })
 
-  it('snags the tether on a post while flying around it', () => {
-    const env = makeEnv({
-      tether: { enabled: true, length: 100, attachPoint: [0, 5] },
-      obstacles: [{ id: 'post', name: 'Post', shape: 'cylinder', position: [6, 5, 0], size: [0.5, 0.5, 3] }],
+  it('attaches the tether at the REAR of the rover, not its center', () => {
+    const env = makeEnv({ tether: { enabled: true, length: 60, attachPoint: [0, 5] } })
+    const state = run(env, { ...zeroDemand, surge: 1 }, 40, {
+      ...initialSimState(env),
+      x: 8,
+      y: 5,
+      depth: 1,
+      heading: 0,
     })
-    // Start past the post and below it, then drive up and across so the cable
-    // (anchored at 0,5) catches on the post as the rover crosses to the far side.
-    let state = { ...initialSimState(env), x: 7, y: 3.5, depth: 1, heading: Math.PI / 2 }
-    let snagged = false
-    for (let i = 0; i < 120 && !snagged; i++) {
-      state = stepSimulation(state, blueRov2HeavyProfile, env, { ...zeroDemand, surge: 1 }, 0.04)
-      if (state.tetherWraps.length > 0) snagged = true
-    }
-    expect(snagged).toBe(true)
-    expect(state.tetherWraps[0].obstacleId).toBe('post')
+    // Heading +x, so the rear attach (last rope node) sits behind the center (smaller x).
+    const lastNode = state.tetherNodes[state.tetherNodes.length - 1]
+    expect(lastNode.x).toBeLessThan(state.x)
+    expect(lastNode.x).toBeGreaterThan(state.x - 1) // but only by ~half a hull length
+  })
+
+  it('snags the tether on a post between the anchor and the rover', () => {
+    const env = makeEnv({
+      pool: { length: 30, width: 12, depth: 4 },
+      tether: { enabled: true, length: 100, attachPoint: [0, 6] },
+      obstacles: [{ id: 'post', name: 'Post', shape: 'cylinder', position: [8, 6, 0], size: [0.6, 0.6, 4] }],
+    })
+    // Rover beyond the post on the anchor→post line: the cable runs through the
+    // post and the rope must wrap around it. Hold position and let it settle.
+    let state = { ...initialSimState(env), x: 15, y: 6.4, depth: 1, heading: 0 }
+    state = run(env, zeroDemand, 200, state)
+    expect(tetherSnaggedObstacleIds(state, env)).toContain('post')
   })
 })
 

@@ -233,6 +233,21 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
+  it('decays a snagged-obstacle highlight even after the tether is disabled', () => {
+    const env = structuredClone(trainingCourseEnvironment) // tether enabled, has gate posts
+    const world = buildPracticeWorld(env)
+    const mesh = world.scene.getObjectByName('obstacle-gate-1l') as THREE.Mesh
+    const mat = mesh.material as THREE.MeshStandardMaterial
+    const pose = { x: 1, y: 1, depth: 1, heading: 0, pitch: 0, roll: 0 }
+    for (let i = 0; i < 20; i++) world.update(pose, { dt: 0.05, tetherSnagged: ['gate-1l'] })
+    expect(mat.emissiveIntensity).toBeGreaterThan(0.2) // lit while snagged
+    // Disable the tether mid-glow and stop snagging — the highlight must fade.
+    env.tether.enabled = false
+    for (let i = 0; i < 50; i++) world.update(pose, { dt: 0.05 })
+    expect(mat.emissiveIntensity).toBeLessThan(0.05)
+    world.dispose()
+  })
+
   it('hides the replay ghost by default and shows it at the ghost pose', () => {
     const world = buildPracticeWorld(openWaterEnvironment)
     const ghost = world.scene.children.find((c) => c.name === 'ghost-rover')!
