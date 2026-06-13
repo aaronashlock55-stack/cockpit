@@ -340,6 +340,17 @@ export const builtInPracticeEnvironments: PracticeEnvironment[] = [
 export const defaultPracticeEnvironment = trainingCourseEnvironment
 
 /**
+ * Deep-clone a practice environment, safe against Vue reactive proxies.
+ * `structuredClone` throws DataCloneError on a reactive proxy (which
+ * `activePracticeEnvironment.value` always is); a JSON round-trip does not, and
+ * the environment is pure JSON data so nothing is lost.
+ * @param {PracticeEnvironment} env The environment to clone (plain or reactive).
+ * @returns {PracticeEnvironment} A detached plain copy.
+ */
+export const clonePracticeEnvironment = (env: PracticeEnvironment): PracticeEnvironment =>
+  JSON.parse(JSON.stringify(env))
+
+/**
  * Validate an unknown value as a PracticeEnvironment. Throws with a clear reason on failure.
  * @param {unknown} maybeEnv Parsed JSON to validate.
  * @returns {PracticeEnvironment} The validated environment.

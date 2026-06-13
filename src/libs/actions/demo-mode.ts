@@ -6,6 +6,7 @@ import { type PracticePoseFrame } from '@/libs/practice-interp'
 import { type SimState, initialSimState, stepSimulation, tetherDeployedLength } from '@/libs/rover-simulator'
 import { tetherFullPath } from '@/libs/rover-tether'
 import { type DiveLogFrame } from '@/types/dive-log'
+import { clonePracticeEnvironment } from '@/types/practice-environment'
 // NOTE: the vehicle store and joystick manager are loaded lazily inside
 // startDemoMode(). Importing them statically from here (which the development
 // store pulls in at boot) changes the production bundle's module evaluation
@@ -85,7 +86,7 @@ const beginPracticeRecording = (): void => {
     rateHz: SIM_HZ / RECORD_EVERY,
     profileName: activeRoverProfile.value.name,
     environmentName: env.name,
-    environment: structuredClone(env),
+    environment: clonePracticeEnvironment(env),
   })
   recordingStartElapsed = elapsed
   frozenElapsed = 0

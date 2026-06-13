@@ -129,7 +129,7 @@ import {
 } from '@/libs/dive-recorder'
 import { type Replay, createReplay } from '@/libs/dive-replay'
 import { type DiveLogSummary } from '@/types/dive-log'
-import { type PracticeEnvironment } from '@/types/practice-environment'
+import { type PracticeEnvironment, clonePracticeEnvironment } from '@/types/practice-environment'
 
 const open = ref(false)
 const logs = ref<DiveLogSummary[]>([])
@@ -158,8 +158,8 @@ const startReplay = async (mode: 'watch' | 'ghost'): Promise<void> => {
   // Practice logs carry their world: load it so the ghost flies the same
   // course, remembering the live world so we can return to it afterward.
   if (log.environment && log.environment.name !== activePracticeEnvironment.value.name) {
-    envBeforeReplay.value = structuredClone(activePracticeEnvironment.value)
-    activePracticeEnvironment.value = structuredClone(log.environment)
+    envBeforeReplay.value = clonePracticeEnvironment(activePracticeEnvironment.value)
+    activePracticeEnvironment.value = clonePracticeEnvironment(log.environment)
     resetPracticeSim()
   }
   const session = reactive(createReplay(log)) as Replay
