@@ -168,6 +168,9 @@ Deep-dive guide:
 9. **Motor setup wizard (BlueOS)** — guided spin-identify flow with a frame diagram.
 10. **Practice environments + 3D trainer (Cockpit)** — configurable pool/water/ice/tether/obstacles (MATE 2026 preset), a top-down **PracticePoolView**, and a first-person **PracticeView3D** flight-sim with marine physics, a visible vehicle frame, and a working claw. Keyboard or gamepad.
 11. **Phases 11–16 (Cockpit, 3D trainer matured)** — profile-derived Fossen 6-DOF physics; full rover model + chase cam; tether snag physics; adjustable camera; water currents (**wave pool / jet stream** presets); consistent hitboxes; custom GLSL water/caustics; and the **flight-sim feel pass** (50 Hz interpolated sim, analog WASD ramp, weight tuning, speed cues, bloom post FX, competition-pool dressing). Detail per phase: `cockpit/docs/BlueOS-2.0-Operator-Assist.md`.
+12. **V2 Mission Engine (Cockpit)** — black-box recording of every practice run + every real armed dive; **Replay / Ghost / Re-fly-from-here**; instructor failure injection (thruster-out, ballast leak, freeze); debrief metrics. `cockpit/docs/BlueOS-2.0-Mission-Engine.md`.
+13. **V2.1 Sensor suite (Cockpit)** — Ping360 **scanning sonar** (SonarView widget), **DVL**, echosounders, pressure→depth, on the data lake. `cockpit/docs/BlueOS-2.0-Sensor-Suite.md`.
+14. **V2.2 Tether rope + widget UX (Cockpit)** — tether is a real **3D Verlet rope**: rear-attached, drapes, **wraps/tangles & sticks** on obstacles, pulls the rover up short; plus a unified practice-widget UX pass. `cockpit/docs/BlueOS-2.0-Tether-Rope.md`.
 
 ## Fastest way to review (no setup)
 
