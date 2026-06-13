@@ -57,7 +57,19 @@ $env:COCKPIT_VERSION='2.0.0'; yarn deploy:electron:windows  # Windows installer 
 ```
 
 The installer lands in `cockpit/dist/` (e.g. `BlueOS 2.0 Control-mac-arm64-2.0.0.dmg`).
-Unsigned dev builds: on macOS right-click → Open the first time.
+
+**macOS dev builds — two gotchas:**
+1. electron-builder leaves the app with a stale ad-hoc signature that macOS
+   refuses to launch ("code has no resources…"). Fix it once after packaging:
+   ```bash
+   codesign --force --deep -s - "dist/mac-arm64/BlueOS 2.0 Control.app"
+   ```
+2. If you **received** the app (AirDrop/Drive/zip) instead of building it,
+   clear the download quarantine before first launch:
+   ```bash
+   xattr -cr "/path/to/BlueOS 2.0 Control.app"
+   ```
+   then right-click → **Open** the first time (unsigned dev build).
 
 ---
 
@@ -155,16 +167,15 @@ Deep-dive guide:
 8. **Pilot-assist (Cockpit)** — one-tap ArduSub mode buttons (Depth Hold, Stabilize…).
 9. **Motor setup wizard (BlueOS)** — guided spin-identify flow with a frame diagram.
 10. **Practice environments + 3D trainer (Cockpit)** — configurable pool/water/ice/tether/obstacles (MATE 2026 preset), a top-down **PracticePoolView**, and a first-person **PracticeView3D** flight-sim with marine physics, a visible vehicle frame, and a working claw. Keyboard or gamepad.
+11. **Phases 11–16 (Cockpit, 3D trainer matured)** — profile-derived Fossen 6-DOF physics; full rover model + chase cam; tether snag physics; adjustable camera; water currents (**wave pool / jet stream** presets); consistent hitboxes; custom GLSL water/caustics; and the **flight-sim feel pass** (50 Hz interpolated sim, analog WASD ramp, weight tuning, speed cues, bloom post FX, competition-pool dressing). Detail per phase: `cockpit/docs/BlueOS-2.0-Operator-Assist.md`.
 
 ## Fastest way to review (no setup)
 
-Read the PRs in the GitHub UI for the controller/video work:
-- BlueOS: https://github.com/aaronashlock55-stack/BlueOS/pull/1
-- cockpit: https://github.com/aaronashlock55-stack/cockpit/pull/1
-
-The operator-assist + 3D-trainer work (Phases 6–10) is on `feature/operator-assist`
-and isn't in a PR yet — `git log --oneline master..feature/operator-assist` shows it,
-or just run it (above).
+Read the PRs in the GitHub UI:
+- BlueOS motor setup: https://github.com/aaronashlock55-stack/BlueOS/pull/1
+- Cockpit controller/video: https://github.com/aaronashlock55-stack/cockpit/pull/1
+- **Cockpit practice trainer + desktop app (Phases 6–16):**
+  https://github.com/aaronashlock55-stack/cockpit/pull/2
 
 ## Troubleshooting
 
