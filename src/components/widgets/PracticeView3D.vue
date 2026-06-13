@@ -50,6 +50,7 @@ import {
   practicePoseFrames,
   practiceSimReadout,
 } from '@/libs/actions/demo-mode-state'
+import { type PracticePost, buildPracticePost } from '@/libs/practice-3d-post'
 import { type PracticeWorld, buildPracticeWorld } from '@/libs/practice-3d-scene'
 import { frameAlpha, interpolatePose } from '@/libs/practice-interp'
 import type { Widget } from '@/types/widgets'
@@ -138,12 +139,16 @@ const structuralSig = computed(() => {
 
 let renderer: THREE.WebGLRenderer | undefined
 let world: PracticeWorld | undefined
+let post: PracticePost | undefined
 let animationFrame: number | undefined
 let resizeObserver: ResizeObserver | undefined
 
 const buildWorld = (): void => {
   world?.dispose()
   world = buildPracticeWorld(activePracticeEnvironment.value, activeRoverProfile.value)
+  // The post chain holds scene/camera refs — rebuild it with the world.
+  post?.dispose()
+  post = renderer ? buildPracticePost(renderer, world.scene, world.camera) : undefined
   resize()
 }
 
@@ -151,10 +156,12 @@ const resize = (): void => {
   if (!renderer || !world || !container.value) return
   const { clientWidth: w, clientHeight: h } = container.value
   if (w === 0 || h === 0) return
-  // Full native pixel ratio (re-applied here so moving the window between
-  // displays tracks the new DPI) — crisp on Retina/4K instead of upscaled.
-  renderer.setPixelRatio(window.devicePixelRatio || 1)
+  // High-DPI, re-applied so moving between displays tracks the new ratio.
+  // Capped at 1.75: bloom at a native 4K/Retina ratio is the main fps risk.
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.75)
+  renderer.setPixelRatio(pixelRatio)
   renderer.setSize(w, h, false)
+  post?.setSize(w, h, pixelRatio)
   world.camera.aspect = w / h
   world.camera.updateProjectionMatrix()
 }
@@ -191,7 +198,8 @@ const renderLoop = (): void => {
       thrusterOutputs: r.thrusterOutputs,
     }
   )
-  renderer.render(world.scene, world.camera)
+  if (post) post.render()
+  else renderer.render(world.scene, world.camera)
 }
 
 const startRenderer = (): void => {
@@ -234,6 +242,8 @@ onBeforeUnmount(() => {
   if (animationFrame !== undefined) cancelAnimationFrame(animationFrame)
   window.removeEventListener('keydown', onViewKey)
   resizeObserver?.disconnect()
+  post?.dispose()
+  post = undefined
   world?.dispose()
   renderer?.dispose()
   renderer = undefined

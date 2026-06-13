@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 
+import { type RoverProfile } from '@/types/rover-profile'
+
 /**
  * Visual-effects helpers for the practice trainer's underwater world: drifting
  * particulate, light shafts, and bubbles. (The water surface and floor
@@ -155,4 +157,152 @@ export const gradientEnvironment = (): THREE.Texture | null => {
   const texture = new THREE.CanvasTexture(canvas)
   texture.mapping = THREE.EquirectangularReflectionMapping
   return texture
+}
+
+/** A speed-reactive effect fed the camera/vehicle state each frame. */
+export interface MotionEffect {
+  /** The scene object. */
+  object: THREE.Object3D
+  /** Advance by dt with the camera world position and vehicle world velocity. */
+  update: (dt: number, camPos: THREE.Vector3, velWorld: THREE.Vector3) => void
+}
+
+/**
+ * Near-camera particulate: a dense cloud of fine motes in a small box that
+ * follows the camera, streaming opposite the vehicle's velocity — the
+ * strongest "I am moving this fast" cue underwater. Nearly invisible parked.
+ * @param {number} count Number of motes.
+ * @returns {MotionEffect} Points + animator.
+ */
+export const buildNearFieldMotes = (count = 250): MotionEffect => {
+  const BOX = new THREE.Vector3(4, 3, 4)
+  const positions = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    positions[i * 3] = (Math.random() - 0.5) * BOX.x
+    positions[i * 3 + 1] = (Math.random() - 0.5) * BOX.y
+    positions[i * 3 + 2] = (Math.random() - 0.5) * BOX.z
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  const material = new THREE.PointsMaterial({
+    color: 0xd6ecf7,
+    size: 0.016,
+    transparent: true,
+    opacity: 0.12,
+    depthWrite: false,
+  })
+  const points = new THREE.Points(geometry, material)
+  points.name = 'near-motes'
+  points.frustumCulled = false
+  const attr = geometry.getAttribute('position') as THREE.BufferAttribute
+  const wrap = (v: number, half: number): number => ((((v + half) % (2 * half)) + 2 * half) % (2 * half)) - half
+  const update = (dt: number, camPos: THREE.Vector3, velWorld: THREE.Vector3): void => {
+    const speed = velWorld.length()
+    material.opacity = 0.12 + 0.38 * Math.min(1, speed / 0.8)
+    for (let i = 0; i < count; i++) {
+      // Motes are world-anchored but wrapped into the camera's box, so flying
+      // through them streams them past the lens.
+      attr.setX(i, camPos.x + wrap(attr.getX(i) - velWorld.x * dt - camPos.x, BOX.x / 2))
+      attr.setY(i, camPos.y + wrap(attr.getY(i) - velWorld.y * dt - camPos.y, BOX.y / 2))
+      attr.setZ(i, camPos.z + wrap(attr.getZ(i) - velWorld.z * dt - camPos.z, BOX.z / 2))
+    }
+    attr.needsUpdate = true
+  }
+  return { object: points, update }
+}
+
+/** Prop wash handle: rover-local bubble bursts behind each thruster. */
+export interface PropWashEffect {
+  /** Group to add as a CHILD of the rover model group (rover-local frame). */
+  object: THREE.Group
+  /** Advance by dt with the spooled per-thruster outputs [-1, 1]. */
+  update: (dt: number, outputs: number[]) => void
+}
+
+/**
+ * Prop-wash bubbles behind each thruster, emission scaling with |output| —
+ * visible thrust feedback (you SEE the motors working against the water).
+ * Thruster positions/orientations come from the profile, same mapping as the
+ * rover model (local frame: nose -Z, up +Y, right +X).
+ * @param {RoverProfile} profile The rover profile.
+ * @returns {PropWashEffect} Group + animator.
+ */
+export const buildPropWash = (profile: RoverProfile): PropWashEffect => {
+  const PER = 22
+  const LIFE = 0.6
+  const group = new THREE.Group()
+  group.name = 'prop-wash'
+  /* eslint-disable jsdoc/require-jsdoc */
+  const jets: {
+    attr: THREE.BufferAttribute
+    material: THREE.PointsMaterial
+    origin: THREE.Vector3
+    dir: THREE.Vector3
+    ages: Float32Array
+    jitter: Float32Array
+  }[] = []
+  /* eslint-enable jsdoc/require-jsdoc */
+  for (const t of profile.thrusters) {
+    const [px, py, pz] = t.position ?? [0, 0, 0]
+    const origin = new THREE.Vector3(py, -pz, -px)
+    const vertical =
+      Math.abs(t.contribution.heave) >= Math.max(Math.abs(t.contribution.surge), Math.abs(t.contribution.sway), 0.01)
+    const dir = vertical ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(t.contribution.sway, 0, -t.contribution.surge)
+    if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1)
+    dir.normalize()
+    const positions = new Float32Array(PER * 3)
+    const ages = new Float32Array(PER)
+    const jitter = new Float32Array(PER * 3)
+    for (let i = 0; i < PER; i++) {
+      ages[i] = LIFE + 1 // start dead
+      jitter[i * 3] = (Math.random() - 0.5) * 0.5
+      jitter[i * 3 + 1] = (Math.random() - 0.5) * 0.5
+      jitter[i * 3 + 2] = (Math.random() - 0.5) * 0.5
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    const material = new THREE.PointsMaterial({
+      color: 0xeaf7ff,
+      size: 0.012,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    })
+    const points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    group.add(points)
+    jets.push({ attr: geometry.getAttribute('position') as THREE.BufferAttribute, material, origin, dir, ages, jitter })
+  }
+  let spawnCursor = 0
+  const update = (dt: number, outputs: number[]): void => {
+    jets.forEach((jet, j) => {
+      const output = outputs[j] ?? 0
+      const power = Math.abs(output)
+      jet.material.opacity = Math.min(0.45, power * 0.55)
+      const washDir = jet.dir.clone().multiplyScalar(-Math.sign(output || 1))
+      for (let i = 0; i < PER; i++) {
+        jet.ages[i] += dt
+        const emitting = power > 0.12
+        if (jet.ages[i] > LIFE && emitting && (spawnCursor = (spawnCursor + 1) % 3) === 0) {
+          jet.ages[i] = 0
+          jet.attr.setXYZ(
+            i,
+            jet.origin.x + jet.jitter[i * 3] * 0.02,
+            jet.origin.y + jet.jitter[i * 3 + 1] * 0.02,
+            jet.origin.z + jet.jitter[i * 3 + 2] * 0.02
+          )
+        } else if (jet.ages[i] <= LIFE) {
+          const speed = 0.5 + power * 0.6
+          jet.attr.setXYZ(
+            i,
+            jet.attr.getX(i) + (washDir.x + jet.jitter[i * 3] * 0.3) * speed * dt,
+            jet.attr.getY(i) + (washDir.y + jet.jitter[i * 3 + 1] * 0.3) * speed * dt,
+            jet.attr.getZ(i) + (washDir.z + jet.jitter[i * 3 + 2] * 0.3) * speed * dt
+          )
+        }
+      }
+      jet.attr.needsUpdate = true
+    })
+  }
+  return { object: group, update }
 }

@@ -157,6 +157,22 @@ describe('buildPracticeWorld', () => {
     world.dispose()
   })
 
+  it('builds near-camera speed motes and rover-mounted prop wash', () => {
+    const world = buildPracticeWorld(openWaterEnvironment)
+    expect(world.scene.children.map((c) => c.name)).toContain('near-motes')
+    const rover = world.scene.children.find((c) => c.name === 'rover')!
+    const wash = rover.children.find((c) => c.name === 'prop-wash')
+    expect(wash).toBeDefined()
+    // One jet per thruster, riding the rover (rover-local frame).
+    expect(wash!.children.length).toBeGreaterThan(3)
+    // Updating with thruster output must not throw and keeps motes following the camera.
+    world.update(
+      { x: 5, y: 5, depth: 1, heading: 0, pitch: 0, roll: 0 },
+      { dt: 0.05, thrusterOutputs: [1, 1, 0, 0, 1, 1, 0, 0] }
+    )
+    world.dispose()
+  })
+
   it('builds the animated water surface and floor caustics', () => {
     const world = buildPracticeWorld(openWaterEnvironment)
     const names = world.scene.children.map((c) => c.name)

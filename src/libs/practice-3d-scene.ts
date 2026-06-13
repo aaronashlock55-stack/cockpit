@@ -1,6 +1,13 @@
 import * as THREE from 'three'
 
-import { buildBubbles, buildDriftingParticles, buildLightShafts, gradientEnvironment } from '@/libs/practice-3d-fx'
+import {
+  buildBubbles,
+  buildDriftingParticles,
+  buildLightShafts,
+  buildNearFieldMotes,
+  buildPropWash,
+  gradientEnvironment,
+} from '@/libs/practice-3d-fx'
 import { buildRoverModel } from '@/libs/practice-3d-rover'
 import { buildShaderCaustics, buildShaderWater } from '@/libs/practice-3d-shaders'
 import { buildPoolDetails, obstacleMaterial, tiledMaterial } from '@/libs/practice-3d-textures'
@@ -261,10 +268,20 @@ export const buildPracticeWorld = (
   const bubbles = buildBubbles(L, W, D)
   scene.add(bubbles.object)
 
+  // Near-camera motes streaming opposite the velocity: the strongest
+  // underwater speed cue.
+  const nearMotes = buildNearFieldMotes()
+  scene.add(nearMotes.object)
+
   // The full rover model (visible in chase view), built from the profile.
   const rover = buildRoverModel(profile)
   rover.group.visible = false
   scene.add(rover.group)
+
+  // Prop wash rides the rover: bubbles burst behind whichever thrusters are
+  // working, so thrust effort is visible (a weight cue, and great feedback).
+  const propWash = buildPropWash(profile)
+  rover.group.add(propWash.object)
 
   // Tether: a real rope (tube) that sags in proportion to slack, straightens
   // and turns red as it runs out, and routes through the ice launch hole.
@@ -318,6 +335,9 @@ export const buildPracticeWorld = (
   let elapsed = 0
   const chasePos = new THREE.Vector3()
   const lookPos = new THREE.Vector3()
+  const lastPos = new THREE.Vector3(NaN, NaN, NaN)
+  const velWorld = new THREE.Vector3()
+  const camWorld = new THREE.Vector3()
   let chaseInit = false
   const roverL = Math.max(profile.dimensions.length, 0.3)
   /** Chase rig stiffness, 1/s (frame-rate independent via exp smoothing). */
@@ -352,6 +372,16 @@ export const buildPracticeWorld = (
     rover.group.rotateZ(pose.roll)
     rover.setClawClosure(opts.gripper ?? 0)
     rover.spinProps((2 + (opts.speed ?? 0) * 18) * delta * 6)
+    propWash.update(delta, opts.thrusterOutputs ?? [])
+
+    // World velocity from pose deltas, for the near-camera speed motes.
+    if (Number.isFinite(lastPos.x) && delta > 1e-4) {
+      velWorld.set((pose.x - lastPos.x) / delta, (-pose.depth - lastPos.y) / delta, (pose.y - lastPos.z) / delta)
+      if (velWorld.lengthSq() > 16) velWorld.setScalar(0) // teleport (env switch) — ignore
+    }
+    lastPos.set(pose.x, -pose.depth, pose.y)
+    camera.getWorldPosition(camWorld)
+    nearMotes.update(delta, camWorld, velWorld)
 
     // The rover (and its mounted camera) are always part of the scene now.
     rover.group.visible = true
