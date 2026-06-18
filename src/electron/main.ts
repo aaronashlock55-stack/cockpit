@@ -1,4 +1,4 @@
-import { app, BrowserWindow, powerSaveBlocker, protocol, screen } from 'electron'
+import { app, BrowserWindow, powerSaveBlocker, protocol, screen, session } from 'electron'
 import { join } from 'path'
 
 import { setupAutoUpdater } from './services/auto-update'
@@ -48,7 +48,7 @@ function createWindow(): void {
     height: store.get('windowBounds')?.height ?? screen.getPrimaryDisplay().workAreaSize.height,
     x: store.get('windowBounds')?.x ?? screen.getPrimaryDisplay().bounds.x,
     y: store.get('windowBounds')?.y ?? screen.getPrimaryDisplay().bounds.y,
-    title: `Cockpit (${app.getVersion()})`,
+    title: `BlueOS 2.0 Control (${app.getVersion()})`,
   })
 
   linkService.setMainWindow(mainWindow)
@@ -109,6 +109,20 @@ setupGo2RTCService()
 app.whenReady().then(async () => {
   console.log('Electron app is ready.')
   console.log(`Cockpit version: ${app.getVersion()}`)
+
+  // Allow the vehicle's BlueOS web interface to render inside the app (the
+  // Tools → BlueOS view): strip frame-blocking response headers.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = { ...details.responseHeaders }
+    for (const key of Object.keys(responseHeaders)) {
+      const lower = key.toLowerCase()
+      if (lower === 'x-frame-options') delete responseHeaders[key]
+      if (lower === 'content-security-policy') {
+        responseHeaders[key] = responseHeaders[key].map((value) => value.replace(/frame-ancestors[^;]*(;|$)/gi, ''))
+      }
+    }
+    callback({ responseHeaders })
+  })
 
   // Inject a Referer header for OSM tile requests before the first tile is fetched, so the
   // standalone build (loaded from file://) complies with the OSM tile usage policy.

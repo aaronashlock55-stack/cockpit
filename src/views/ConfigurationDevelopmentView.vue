@@ -34,6 +34,206 @@
               hide-details
               class="min-w-[155px]"
             />
+            <v-switch
+              v-model="devStore.enableDemoMode"
+              label="Practice / Demo mode (no vehicle)"
+              color="white"
+              hide-details
+              class="min-w-[155px]"
+            />
+          </div>
+          <div v-if="devStore.enableDemoMode" class="flex flex-col w-full mt-2 px-1 gap-y-2">
+            <span class="text-xs text-gray-300">
+              Rover profile used by the practice simulator — pick a preset, upload your own, or import from a connected
+              vehicle. The sim then handles like that rover.
+            </span>
+            <div class="flex flex-row flex-wrap items-center gap-2">
+              <v-select
+                v-model="selectedProfileName"
+                :items="profileNames"
+                label="Rover profile"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="min-w-[220px] max-w-[300px]"
+                @update:model-value="selectBuiltInProfile"
+              />
+              <v-btn variant="outlined" color="white" size="small" prepend-icon="mdi-tray-arrow-up">
+                Upload
+                <input type="file" accept="application/json" class="hidden-file-input" @change="onUploadProfile" />
+              </v-btn>
+              <v-btn
+                variant="outlined"
+                color="white"
+                size="small"
+                prepend-icon="mdi-tray-arrow-down"
+                @click="onDownloadProfile"
+              >
+                Download
+              </v-btn>
+              <v-btn
+                variant="outlined"
+                color="white"
+                size="small"
+                prepend-icon="mdi-import"
+                @click="onImportFromVehicle"
+              >
+                Import from vehicle
+              </v-btn>
+            </div>
+            <span class="text-xs text-gray-400"
+              >Active: {{ activeRoverProfile.name }} ({{ activeRoverProfile.thrusters.length }} thrusters)</span
+            >
+            <v-divider class="my-1" />
+            <span class="text-xs text-gray-300">
+              Practice environment — pool, water, ice, tether, and obstacles (e.g. the MATE 2026 ice-tank mission). Add
+              the <b>PracticePoolView</b> widget to watch the rover in the pool.
+            </span>
+            <div class="flex flex-row flex-wrap items-center gap-2">
+              <v-select
+                v-model="selectedEnvName"
+                :items="envNames"
+                label="Environment"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="min-w-[260px] max-w-[320px]"
+                @update:model-value="selectBuiltInEnv"
+              />
+              <v-btn variant="outlined" color="white" size="small" prepend-icon="mdi-tray-arrow-up">
+                Upload
+                <input type="file" accept="application/json" class="hidden-file-input" @change="onUploadEnv" />
+              </v-btn>
+              <v-btn
+                variant="outlined"
+                color="white"
+                size="small"
+                prepend-icon="mdi-tray-arrow-down"
+                @click="downloadPracticeEnvironment(activePracticeEnvironment)"
+              >
+                Download
+              </v-btn>
+              <v-btn variant="outlined" color="white" size="small" prepend-icon="mdi-restart" @click="onResetSim">
+                Reset rover
+              </v-btn>
+            </div>
+            <div class="flex flex-row flex-wrap items-center gap-x-4 gap-y-1">
+              <v-text-field
+                v-model.number="activePracticeEnvironment.pool.length"
+                label="Pool length (m)"
+                type="number"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[130px]"
+              />
+              <v-text-field
+                v-model.number="activePracticeEnvironment.pool.width"
+                label="Width (m)"
+                type="number"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[110px]"
+              />
+              <v-text-field
+                v-model.number="activePracticeEnvironment.pool.depth"
+                label="Depth (m)"
+                type="number"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[110px]"
+              />
+              <v-text-field
+                v-model.number="activePracticeEnvironment.water.salinityPpt"
+                label="Salinity (ppt)"
+                type="number"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[120px]"
+              />
+              <v-text-field
+                v-model.number="activePracticeEnvironment.water.temperatureC"
+                label="Water temp (°C)"
+                type="number"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[130px]"
+              />
+            </div>
+            <div class="flex flex-row flex-wrap items-center gap-x-4 gap-y-1">
+              <v-switch
+                v-model="activePracticeEnvironment.tether.enabled"
+                label="Tether"
+                color="white"
+                hide-details
+                density="compact"
+              />
+              <v-text-field
+                v-if="activePracticeEnvironment.tether.enabled"
+                v-model.number="activePracticeEnvironment.tether.length"
+                label="Tether length (m)"
+                type="number"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[150px]"
+              />
+              <span class="text-xs text-gray-400">
+                {{ activePracticeEnvironment.obstacles.length }} obstacle(s)
+                <template v-if="activePracticeEnvironment.iceSheet"> · ice sheet with launch hole</template>
+                — edit via Download → JSON → Upload
+              </span>
+            </div>
+            <div class="flex flex-row flex-wrap items-center gap-x-4 gap-y-1">
+              <v-select
+                :model-value="activePracticeEnvironment.flow?.type ?? 'none'"
+                :items="flowTypes"
+                label="Water motion"
+                density="compact"
+                variant="outlined"
+                theme="dark"
+                hide-details
+                class="max-w-[180px]"
+                @update:model-value="setFlowType"
+              />
+              <template v-if="activePracticeEnvironment.flow">
+                <v-text-field
+                  v-model.number="activePracticeEnvironment.flow.speed"
+                  label="Flow speed (m/s)"
+                  type="number"
+                  density="compact"
+                  variant="outlined"
+                  theme="dark"
+                  hide-details
+                  class="max-w-[150px]"
+                />
+                <v-text-field
+                  v-model.number="activePracticeEnvironment.flow.directionDeg"
+                  label="Direction (°)"
+                  type="number"
+                  density="compact"
+                  variant="outlined"
+                  theme="dark"
+                  hide-details
+                  class="max-w-[130px]"
+                />
+                <span class="text-xs text-gray-400">
+                  {{ flowHint }}
+                </span>
+              </template>
+            </div>
           </div>
         </div>
         <ExpansiblePanel :is-expanded="!interfaceStore.isOnPhoneScreen" no-bottom-divider>
@@ -101,9 +301,14 @@
 import { parse } from 'date-fns'
 import { saveAs } from 'file-saver'
 import { onBeforeMount, onBeforeUnmount } from 'vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import ExpansiblePanel from '@/components/ExpansiblePanel.vue'
+import { useSnackbar } from '@/composables/snackbar'
+import { resetPracticeSim } from '@/libs/actions/demo-mode'
+import { activePracticeEnvironment, activeRoverProfile } from '@/libs/actions/demo-mode-state'
+import { downloadPracticeEnvironment, readPracticeEnvironmentFile } from '@/libs/practice-env-io'
+import { downloadRoverProfile, importRoverProfileFromVehicle, readRoverProfileFile } from '@/libs/rover-profile-io'
 import {
   type SystemLog,
   cockpitSytemLogsDB,
@@ -115,10 +320,123 @@ import { formatBytes, isElectron } from '@/libs/utils'
 import { reloadCockpitAndWarnUser } from '@/libs/utils-vue'
 import { useAppInterfaceStore } from '@/stores/appInterface'
 import { useDevelopmentStore } from '@/stores/development'
+import { useMainVehicleStore } from '@/stores/mainVehicle'
+import { type FlowField, builtInPracticeEnvironments } from '@/types/practice-environment'
+import { builtInRoverProfiles } from '@/types/rover-profile'
 
 import BaseConfigurationView from './BaseConfigurationView.vue'
 const devStore = useDevelopmentStore()
 const interfaceStore = useAppInterfaceStore()
+const vehicleStore = useMainVehicleStore()
+const { openSnackbar } = useSnackbar()
+
+const selectedProfileName = ref(activeRoverProfile.value.name)
+const profileNames = computed(() => {
+  const names = builtInRoverProfiles.map((p) => p.name)
+  if (!names.includes(activeRoverProfile.value.name)) names.unshift(activeRoverProfile.value.name)
+  return names
+})
+
+const selectBuiltInProfile = (name: string): void => {
+  const profile = builtInRoverProfiles.find((p) => p.name === name)
+  if (profile) activeRoverProfile.value = profile
+}
+
+const onUploadProfile = async (event: Event): Promise<void> => {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  try {
+    const profile = await readRoverProfileFile(file)
+    activeRoverProfile.value = profile
+    selectedProfileName.value = profile.name
+    openSnackbar({ variant: 'success', message: `Loaded rover profile "${profile.name}".`, duration: 3000 })
+  } catch (error) {
+    openSnackbar({ variant: 'error', message: `${error instanceof Error ? error.message : error}`, duration: 5000 })
+  }
+}
+
+const onDownloadProfile = (): void => {
+  downloadRoverProfile(activeRoverProfile.value)
+}
+
+const selectedEnvName = ref(activePracticeEnvironment.value.name)
+const envNames = computed(() => {
+  const names = builtInPracticeEnvironments.map((e) => e.name)
+  if (!names.includes(activePracticeEnvironment.value.name)) names.unshift(activePracticeEnvironment.value.name)
+  return names
+})
+
+const selectBuiltInEnv = (name: string): void => {
+  const env = builtInPracticeEnvironments.find((e) => e.name === name)
+  if (!env) return
+  activePracticeEnvironment.value = structuredClone(env)
+  resetPracticeSim()
+}
+
+const onUploadEnv = async (event: Event): Promise<void> => {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  try {
+    const env = await readPracticeEnvironmentFile(file)
+    activePracticeEnvironment.value = env
+    selectedEnvName.value = env.name
+    resetPracticeSim()
+    openSnackbar({ variant: 'success', message: `Loaded practice environment "${env.name}".`, duration: 3000 })
+  } catch (error) {
+    openSnackbar({ variant: 'error', message: `${error instanceof Error ? error.message : error}`, duration: 5000 })
+  }
+}
+
+const onResetSim = (): void => {
+  resetPracticeSim()
+  openSnackbar({ variant: 'info', message: 'Rover reset to start position.', duration: 2000 })
+}
+
+const flowTypes = [
+  { title: 'None (still water)', value: 'none' },
+  { title: 'Steady current', value: 'current' },
+  { title: 'Wave pool', value: 'waves' },
+  { title: 'Jet stream', value: 'jet' },
+]
+
+const flowHint = computed(() => {
+  const f = activePracticeEnvironment.value.flow
+  if (!f) return ''
+  if (f.type === 'waves') return 'Surface chop — strongest near the top, calms with depth.'
+  if (f.type === 'jet') return 'Fast band across the pool middle; the rest is calm.'
+  return 'Uniform push across the whole pool.'
+})
+
+const setFlowType = (type: string): void => {
+  const env = activePracticeEnvironment.value
+  if (type === 'none') {
+    env.flow = undefined
+    return
+  }
+  const speed = env.flow?.speed ?? (type === 'jet' ? 1.1 : 0.6)
+  const directionDeg = env.flow?.directionDeg ?? (type === 'jet' ? 90 : 0)
+  const flow: FlowField = { type: type as FlowField['type'], speed, directionDeg }
+  if (type === 'jet') {
+    flow.jetCenter = env.flow?.jetCenter ?? env.pool.width / 2
+    flow.jetWidth = env.flow?.jetWidth ?? Math.max(2, env.pool.width / 4)
+  }
+  env.flow = flow
+}
+
+const onImportFromVehicle = (): void => {
+  if (!vehicleStore.isVehicleOnline) {
+    openSnackbar({ variant: 'warning', message: 'No vehicle connected to import from.', duration: 4000 })
+    return
+  }
+  const profile = importRoverProfileFromVehicle(vehicleStore.icon ?? undefined)
+  activeRoverProfile.value = profile
+  selectedProfileName.value = profile.name
+  openSnackbar({
+    variant: 'success',
+    message: `Imported "${profile.name}" from the connected vehicle.`,
+    duration: 3000,
+  })
+}
 
 /* eslint-disable jsdoc/require-jsdoc */
 interface SystemLogsData {
@@ -346,6 +664,13 @@ const deleteOldLogsFromDB = async (): Promise<void> => {
 .custom-header {
   background-color: #333 !important;
   color: #fff;
+}
+
+.hidden-file-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .current-session-indicator {

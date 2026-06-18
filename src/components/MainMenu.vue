@@ -235,6 +235,7 @@ import ConfigurationMAVLinkView from '@/views/ConfigurationMAVLinkView.vue'
 import ConfigurationMissionView from '@/views/ConfigurationMissionView.vue'
 import ConfigurationUIView from '@/views/ConfigurationUIView.vue'
 import ConfigurationVideoView from '@/views/ConfigurationVideoView.vue'
+import ToolsBlueOSView from '@/views/ToolsBlueOSView.vue'
 import ToolsDataLakeView from '@/views/ToolsDataLakeView.vue'
 import ToolsMAVLinkView from '@/views/ToolsMAVLinkView.vue'
 
@@ -423,6 +424,12 @@ const configMenu = computed(() => {
 
 const toolsMenu = computed(() => {
   const menusToShow = [
+    {
+      icon: 'mdi-submarine',
+      title: 'BlueOS',
+      componentName: SubMenuComponentName.ToolsBlueOS,
+      component: markRaw(ToolsBlueOSView) as SubMenuComponent,
+    },
     {
       icon: 'mdi-protocol',
       title: 'MAVLink',
