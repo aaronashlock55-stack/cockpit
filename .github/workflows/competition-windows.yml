@@ -1,0 +1,60 @@
+name: Competition Windows Build
+
+# Builds the "BlueOS 2.0 Control" Windows (x64) installer natively on a Windows
+# runner, so the bundled ffmpeg/go2rtc binaries (fetched by postinstall) are the
+# correct Windows builds. Fires on push to the competition-build branch, or
+# manually. The installer is uploaded as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Installer version string
+        required: false
+        default: "2.0.0"
+  push:
+    branches:
+      - competition-build
+
+env:
+  # Raise V8 old-space so `vite build` doesn't OOM (mirrors ci.yml).
+  NODE_OPTIONS: --max-old-space-size=6144
+  COCKPIT_VERSION: ${{ github.event.inputs.version || '2.0.0' }}
+
+jobs:
+  build-windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+
+      - name: Install (postinstall fetches Windows ffmpeg/go2rtc)
+        run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - name: Build web bundle
+        run: yarn build
+
+      - name: Package Windows installer (NSIS)
+        run: yarn deploy:electron:windows
+
+      - name: List dist
+        run: dir dist
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlueOS-2.0-Control-Windows-x64
+          path: |
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml
+          if-no-files-found: error
